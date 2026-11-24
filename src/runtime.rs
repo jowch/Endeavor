@@ -233,15 +233,23 @@ fn stop_old(old: &Path) -> bool {
 
 #[cfg(unix)]
 fn group_gone(pgid: i32) -> bool {
+    if pgid <= 1 {
+        return false;
+    }
     // SAFETY: signal 0 only checks.
-    if pgid <= 1 || unsafe { libc::kill(-pgid, 0) } != 0 {
-        return pgid > 1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    if unsafe { libc::kill(-pgid, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        return true;
     }
     let Ok(out) = Command::new("ps").args(["-A", "-o", "pgid=,stat="]).stderr(Stdio::null()).output() else { return false };
     !String::from_utf8_lossy(&out.stdout).lines().any(|line| {
         let mut fields = line.split_whitespace();
-        fields.next().and_then(|g| g.parse::<i32>().ok()) == Some(pgid) && fields.next().is_some_and(|stat| !stat.starts_with('Z'))
+        fields.next().and_then(|g| g.parse::<i32>().ok()) == Some(pgid) && fields.next().is_some_and(|stat| !exited(stat))
     })
+}
+
+#[cfg(unix)]
+fn exited(ps_stat: &str) -> bool {
+    ps_stat.starts_with('Z') || ps_stat.starts_with('E')
 }
 
 #[cfg(windows)]
@@ -525,16 +533,6 @@ fn wait_runs_from(pid: u32, dir: &Path) {
 }
 
 #[cfg(all(test, unix))]
-fn wait_until_it_runs_its_script(pid: u32) {
-    let has_child = || {
-        Command::new("ps").args(["-A", "-o", "ppid="]).output().is_ok_and(|out| {
-            String::from_utf8_lossy(&out.stdout).lines().any(|line| line.trim().parse() == Ok(pid))
-        })
-    };
-    assert!((0..50).any(|_| has_child() || { std::thread::sleep(Duration::from_millis(100)); false }), "pid {pid} started no child: its shell isn't running the script");
-}
-
-#[cfg(all(test, unix))]
 #[test]
 fn only_a_runtime_started_with_the_old_folder_is_taken_for_it() {
     let old = std::env::temp_dir().join(format!("endeavor-runs-from-{}", std::process::id()));
@@ -577,19 +575,31 @@ fn the_old_folder_goes_only_once_its_runtime_is_gone() {
         .arg(&old).output().unwrap();
     let core: u32 = String::from_utf8_lossy(&spawn.stdout).trim().parse().unwrap();
     wait_runs_from(core, &old);
-    wait_until_it_runs_its_script(core);
     record(core);
     retire_old_state_in(&old, &stop_old);
     assert!(!old.exists(), "the folder goes with the runtime");
-    #[cfg(target_os = "linux")]
-    {
-        let mut child = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
-        wait_runs_from(child.id(), &old);
-        record(child.id());
-        retire_old_state_in(&old, &stop_old);
-        assert!(!old.exists(), "the folder goes while the stopped runtime is an unreaped zombie");
-        let _ = child.wait();
-    }
+    let mut child = Command::new("sh").args(["-c", "sleep 60; :", "core", "--state-dir"]).arg(&old).process_group(0).spawn().unwrap();
+    wait_runs_from(child.id(), &old);
+    record(child.id());
+    retire_old_state_in(&old, &stop_old);
+    assert!(!old.exists(), "the folder goes while the stopped runtime is an unreaped zombie");
+    let _ = child.wait();
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn a_group_whose_processes_have_all_exited_is_gone_before_they_are_reaped() {
+    use std::os::unix::process::CommandExt as _;
+    let mut child = Command::new("sleep").arg("60").process_group(0).spawn().unwrap();
+    let pgid = i32::try_from(child.id()).unwrap();
+    assert!(!group_gone(pgid), "a running group isn't gone");
+    child.kill().unwrap();
+    let stat = || Command::new("ps").args(["-o", "stat=", "-p", &child.id().to_string()]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
+    assert!((0..50).any(|_| exited(&stat()) || { std::thread::sleep(Duration::from_millis(100)); false }), "the killed child shows as exited: ps says {:?}", stat());
+    assert!(group_gone(pgid), "a group of unreaped zombies is gone");
+    child.wait().unwrap();
+    assert!(group_gone(pgid), "a reaped group is gone");
+    assert!(!group_gone(1) && !group_gone(0), "pid 1 and 0 never count as a stopped runtime");
 }
 
 #[cfg(all(test, unix))]
