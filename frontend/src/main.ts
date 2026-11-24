@@ -34,10 +34,12 @@ function initOnMarimo() {
   initQuote();
   initAskBox();
   initAnnotate();
+  initRail();
   initDismissResumedBanner();
   initMarimoDocs();
   initMarimoPackages();
   initDebug();
+  watchRedraws();
   send({ type: "ready" });
 }
 

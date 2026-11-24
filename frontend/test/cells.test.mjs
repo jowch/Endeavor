@@ -59,10 +59,10 @@ test("unrun and author marks follow the app and survive redraws", async () => {
   assert.equal(cell(B).getAttribute("data-author"), "user");
 
   const marks = [...doc.querySelectorAll("#endeavor-rail a")];
-  assert.deepEqual(marks.map((m) => [m.dataset.cell, m.className]), [[A, ""]]);
+  assert.deepEqual(marks.map((m) => [m.dataset.cell, m.dataset.state]), [[A, "claude"], [B, "ran"], [C, "ran"]], "one mark per cell, by its run state");
   let scrolled = null;
   cell(A).scrollIntoView = () => (scrolled = A);
-  marks[0].click();
+  marks[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   assert.equal(scrolled, A);
 
   const fresh = doc.createElement("pluto-cell");
@@ -75,7 +75,7 @@ test("unrun and author marks follow the app and survive redraws", async () => {
   window.__endeavor.receive(cellsMsg([{ cell_id: A, author: "agent" }]));
   assert.equal(cell(A).getAttribute("data-endeavor"), null);
   assert.equal(cell(A).getAttribute("data-endeavor-bar"), null);
-  assert.equal(doc.querySelectorAll("#endeavor-rail a").length, 0);
+  assert.deepEqual([...doc.querySelectorAll("#endeavor-rail a")].map((m) => m.dataset.state), ["ran", "ran", "ran"]);
 });
 
 test("one status bar: Claude's cells in orange, queued and running in orange, the rest Pluto's own", async () => {
@@ -100,7 +100,7 @@ test("one status bar: Claude's cells in orange, queued and running in orange, th
   doc.body.append(doc.createElement("div"));
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(bar(doc, C), "Pluto's");
-  assert.deepEqual([...doc.querySelectorAll("#endeavor-rail a")].map((m) => [m.dataset.cell, m.className]), [[A, ""], [B, "user"], [C, "user"]]);
+  assert.deepEqual([...doc.querySelectorAll("#endeavor-rail a")].map((m) => [m.dataset.cell, m.dataset.state]), [[A, "claude"], [B, "pending"], [C, "pending"]]);
 
   cell(A).classList.add("queued");
   assert.deepEqual(bar(doc, A), QUEUED);
@@ -122,4 +122,51 @@ test("one status bar: Claude's cells in orange, queued and running in orange, th
   cell(C).classList.remove("running");
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(bar(doc, C), "Pluto's");
+});
+
+test("the rail's states: running, not run yet, failed and ran, with Ember's own rail colour and not-run marks", async () => {
+  const { window, doc } = await page();
+  const cell = (id) => doc.getElementById(id);
+  const states = () => [...doc.querySelectorAll("#endeavor-rail a")].map((m) => m.dataset.state);
+  const redraw = async () => {
+    doc.body.append(doc.createElement("div"));
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  cell(A).classList.add("running");
+  cell(B).classList.add("queued");
+  cell(C).classList.add("errored");
+  await redraw();
+  assert.deepEqual(states(), ["running", "pending", "failed"]);
+  cell(A).classList.remove("running");
+  cell(B).classList.replace("queued", "not_run_yet");
+  cell(C).classList.add("code_differs");
+  await redraw();
+  assert.deepEqual(states(), ["ran", "pending", "pending"], "an edited cell with an old error is waiting to run, as Ember's rail says");
+  cell(B).classList.remove("not_run_yet");
+  cell(B).setAttribute("data-rail", "due");
+  cell(C).classList.remove("code_differs", "errored");
+  cell(C).classList.add("stale");
+  await redraw();
+  assert.deepEqual(states(), ["ran", "pending", "pending"]);
+  window.__endeavor.receive(cellsMsg([{ cell_id: A, unrun: true, author: "agent" }, { cell_id: B }, { cell_id: C }]));
+  await redraw();
+  assert.equal(states()[0], "claude", "Claude's edit, not run");
+  cell(A).classList.add("running");
+  await redraw();
+  assert.equal(states()[0], "running", "Claude's cell pulses while it runs, like any other");
+});
+
+test("the rail shows every cell as not run yet in safe preview, whatever its saved state", async () => {
+  const { doc } = await page();
+  const states = () => [...doc.querySelectorAll("#endeavor-rail a")].map((m) => m.dataset.state);
+  const editor = doc.querySelector("pluto-editor") ?? doc.body.appendChild(doc.createElement("pluto-editor"));
+  doc.getElementById(C).classList.add("errored");
+  editor.classList.add("process_waiting_for_permission");
+  doc.body.append(doc.createElement("div"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(states(), ["pending", "pending", "pending"]);
+  editor.classList.remove("process_waiting_for_permission");
+  doc.body.append(doc.createElement("div"));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(states(), ["ran", "ran", "failed"]);
 });
