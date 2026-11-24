@@ -2136,9 +2136,11 @@ impl RFailedShows<'_> {
     }
 }
 
+const UV_WONT_START: &str = "python_not_found::Couldn't start uv";
+
 pub fn r_failed_shows<'a>(host: &HostId, error: &'a str, own_uv_there: bool, own_r: Option<wire::Item>) -> RFailedShows<'a> {
     let here = *host == HostId::ThisMac;
-    if error.starts_with("python_not_found::") {
+    if error.starts_with("python_not_found::") && !error.starts_with(UV_WONT_START) {
         return if own_uv_there { RFailedShows::InstallUv } else { RFailedShows::NoUv };
     }
     if let Some(why) = pluto::python_failed(error) {
@@ -2556,6 +2558,10 @@ mod tests {
             assert_eq!(r_failed_shows(&lab, said, false, None), RFailedShows::NoUv, "a Slurm job: {said}");
         }
         assert_eq!(RFailedShows::NoUv.button(), "python-retry");
+        let noexec = "python_not_found::Couldn't start uv (/home/u/.cache/endeavor/uv-0.11.32/uv): Permission denied (os error 13)";
+        for own_uv in [true, false] {
+            assert_eq!(r_failed_shows(&lab, noexec, own_uv, None), RFailedShows::PythonFailed("Couldn't start uv (/home/u/.cache/endeavor/uv-0.11.32/uv): Permission denied (os error 13)"));
+        }
         assert_eq!(r_failed_shows(&here, "python_failed::Couldn't download uv: offline", true, None), RFailedShows::PythonFailed("Couldn't download uv: offline"));
     }
 
