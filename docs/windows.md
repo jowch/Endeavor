@@ -120,11 +120,11 @@ Each stub is marked "Not ported" in the code.
 
 **`endeavor-mcp` (the app's local runtime runs it too):**
 
-- `lib.rs`, `ask_to_hand_over`, `watch_replace_signal`, `block_sigusr1`: no
-  handover between clients, so a second client waits for the lock (about 30 s)
-  and fails. Needs a named event, or a "release" call on a loopback port.
-  Locally this matters only if a helper is still running when the app starts
-  again; a helper exits when the app that started it goes away.
+- The handover between clients is gone on every platform: clients attach to
+  the one runtime on a machine instead of taking it over (EndeavorMCP's
+  `docs/endeavor-mcp.md`). What's left of the signal, `lib.rs`'s
+  `block_sigusr1`, only keeps an older build's helper from ending a newer one
+  on Unix; Windows has no such signal and needs nothing in its place.
 - `http.rs`, `wait_readable`: doesn't watch the client, so a client that hangs
   up during an event stream is noticed only when a write to it fails. Needs
   `WSAPoll`.
@@ -336,12 +336,10 @@ This is the largest item. Starting, watching and stopping the runtime is
 written (see [How process control works on
 Windows](#how-process-control-works-on-windows)). Left:
 
-- The handover between clients: the signal (SIGUSR1 on Unix) becomes a named
-  event, or a "release" call on a loopback port.
 - The `poll`/`recv(MSG_PEEK)` calls in `http.rs` and `mcp.rs` need Windows
   versions (stubs, see above).
 
-### ssh from Windows (M if askpass works, L if not)
+### ssh from Windows
 
 - **Askpass transport. Done.** The password and 2FA prompts reach the app over
   loopback TCP with a per-connect token in an environment variable
@@ -349,11 +347,10 @@ Windows](#how-process-control-works-on-windows)). Left:
 - **Connection sharing. Done.** Windows OpenSSH has no ControlMaster, and a
   user's `~/.ssh/config` might turn it on, so EndeavorMCP's ssh command passes
   `-o ControlMaster=no -o ControlPath=none` there.
-- **Open question:** whether the ssh in Windows 10 and 11 honours
-  `SSH_ASKPASS_REQUIRE=force`, including for Duo prompts (the same question
-  as in remote-sessions.md). If it doesn't, the fallbacks are running ssh
-  under a hidden console (ConPTY) or an ssh library in Rust such as `russh`.
-  Either adds about two weeks.
+- **Prompts. Answered.** Windows' OpenSSH 9.5 uses `SSH_ASKPASS` only with
+  `SSH_ASKPASS_REQUIRE=force`, which the ssh command sets, so its password
+  and 2FA prompts reach the app through `client::Asker` like everywhere else.
+  No hidden console or Rust ssh library is needed.
 
 ### Paths (written; tried on Windows with a Linux server)
 
@@ -429,7 +426,7 @@ only with servers.
   - Reduce motion: done, "Animation effects" with
     `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`, watched through
     `WM_SETTINGCHANGE` on a hidden window (`src/platform.rs`).
-  - Open a URL: `ShellExecute`.
+  - Open a URL: done, with `ShellExecuteW` (`src/signin.rs`).
   - Set a WebView2 data folder: the default, next to the exe, isn't writable
     under Program Files.
 - **Custom scheme: written, untried.** wry serves `endeavor://` as
@@ -453,7 +450,7 @@ only with servers.
 - **Title bar: native for now.** Windows keeps its own title bar, with the
   window's buttons, above the column headers. Drawing the buttons in the
   sidebar's header instead (GPUI's `WindowControlArea`) would save its height.
-- **Wording (S).** "This Mac" (about 60 places in `src/`), "Reveal in Finder", and
+- **Wording (S).** "This Mac" (73 places in `src/` on 2026-11-23), "Reveal in Finder", and
   `HostId::ThisMac`. This is shared with Linux; see
   [linux.md](linux.md#remaining-work-ranked).
 - **Cargo (S).** The stubs left will need more of `windows-sys`' features.
@@ -593,17 +590,14 @@ test binary as its own stand-in core.
 
 ## Risks, ranked
 
-1. **ssh prompts.** Whether Windows OpenSSH shows askpass prompts decides
-   whether ssh work takes days or weeks. Test this first, on a real Windows 11
-   machine, against a server with Duo.
-2. **Process control.** Getting the Job Object and detaching right so that
+1. **Process control.** Getting the Job Object and detaching right so that
    Pluto workers never leak, and handling pid reuse.
-3. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
+2. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
    GPUI draws (a plain window swap chain, since DirectComposition is off).
    Hiding the web view is the fallback.
-4. **GPUI's Windows backend is new.** It looks complete, but it has had
+3. **GPUI's Windows backend is new.** It looks complete, but it has had
    little use, and Zed doesn't embed a child window the way Endeavor does.
-5. **Claude Code's shell requirements** on Windows.
+4. **Claude Code's shell requirements** on Windows.
 
 ## Suggested order
 
@@ -611,7 +605,7 @@ test binary as its own stand-in core.
    [Status](#status-it-builds-with-stubs)).
 2. Run a local notebook: process control, downloads, paths. **Written,
    untried**: the list above on a real machine.
-3. Test ssh askpass on Windows 11. The result sets the size of the ssh work.
+3. ssh askpass on Windows: **answered** (it works with `SSH_ASKPASS_REQUIRE=force`).
 4. Notebook view: shortcuts, menus, snapshot.
 5. Smaller fixes and tests (CI is done).
 6. Installer and signing.
