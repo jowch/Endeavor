@@ -39,7 +39,6 @@ const withSite = (url: string) => url + (url.includes('?') ? '&' : '?') + 'sourc
 			<p class="note">Something about how the agent used a notebook? <a href="https://github.com/jowch/EndeavorMCP/issues/new/choose">EndeavorMCP's issues</a> has a form for that.</p>
 		</main>
 		<script is:inline define:vars={{ fields }}>
-			// The app links here with its build, platform and agent; pass them on to the forms.
 			const given = new URLSearchParams(location.search);
 			for (const a of document.querySelectorAll('a[data-form]')) {
 				const url = new URL(a.href);

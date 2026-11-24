@@ -1,18 +1,4 @@
 #!/bin/sh
-# Write the manifest an installed nightly reads to find a newer build:
-#
-#   scripts/nightly-manifest.sh DIR COMMIT COMMITTED > nightly.json
-#
-# DIR holds the files being published (Endeavor-macos-arm64.dmg and, when
-# there is one, Endeavor-windows-x86_64-setup.exe). COMMIT is the full hash
-# they were built from; COMMITTED its committer time (not the author time;
-# on main that is when it merged), ISO 8601 in UTC. The app compares
-# COMMITTED with its own committer time, so it never offers an older build,
-# and identifies builds by `commit`: `build` is the first 7 characters, for
-# display only (build.rs's --short=7 can be longer). It checks the SHA-256 of
-# what it downloads against this file.
-# The hash only proves the download is the file named here: on the Mac the
-# app's own signature check is what proves it is ours (app #80).
 set -eu
 [ $# -eq 3 ] || { echo "usage: $0 DIR COMMIT COMMITTED" >&2; exit 2; }
 dir=$1 commit=$2 committed=$3

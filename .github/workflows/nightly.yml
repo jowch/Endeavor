@@ -1,31 +1,8 @@
-# Keeps one "nightly" prerelease holding the newest build of main that passed
-# CI on macOS, Linux and Windows: Endeavor-macos-arm64.dmg (scripts/bundle.sh's
-# app, with the Linux servers' helpers inside) and Endeavor-windows-x86_64-setup.exe
-# (the installer windows.yml built from that same commit), and nightly.json,
-# which an installed nightly reads to find a newer build
-# (scripts/nightly-manifest.sh; app #80). Each run replaces the files and moves
-# the tag, so the download links stay the same and releases don't pile up. A scheduled run does nothing when the nightly already holds
-# that commit. On a pull request that changes the Mac packaging it only builds
-# the disk image from the pull request and keeps it as an Actions artifact,
-# with a screenshot of its window and the manifest it would get; nothing is published. The schedule
-# publishes only while the repository variable NIGHTLY_PUBLISH is true.
-# The Mac app is signed with a Developer ID and the disk image notarized when
-# the "release" environment (main only) has the signing secrets (MACOS_CERT_P12, the certificate and
-# its key as a base64 .p12; MACOS_CERT_PASSWORD; APPLE_TEAM_ID; and an App
-# Store Connect API key: APPLE_API_KEY_P8, APPLE_API_KEY_ID,
-# APPLE_API_ISSUER_ID). Without them a run that doesn't publish stays ad-hoc
-# signed, and a run that publishes fails rather than publish a Mac build
-# Gatekeeper blocks. Pull requests never sign or publish.
-# ponytail: the installer isn't signed (SmartScreen warns). Apple Silicon
-# only. The Windows build ships no server helpers and downloads them
-# (windows.yml).
 name: Nightly
 
 on:
   schedule:
     - cron: '0 9 * * *'
-  # A run by hand builds (and on main signs and notarizes) the Mac disk image
-  # and keeps it as an artifact; it publishes only when asked to.
   workflow_dispatch:
     inputs:
       publish:
@@ -47,8 +24,6 @@ permissions:
   contents: read
 
 jobs:
-  # The newest main commit whose Windows run (with its installer) and CI run
-  # both passed; on a pull request, its head.
   pick:
     runs-on: ubuntu-24.04
     permissions:
@@ -95,8 +70,6 @@ jobs:
     needs: pick
     if: needs.pick.outputs.skip != 'true'
     runs-on: macos-15
-    # The signing secrets live in the "release" environment, which only main
-    # may use. Pull requests run outside it and never sign.
     environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
     outputs:
       signed: ${{ steps.signing.outputs.signed }}
@@ -104,8 +77,6 @@ jobs:
     env:
       SIGN: ${{ github.event_name != 'pull_request' && secrets.MACOS_CERT_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
-      # A published build must be signed and notarized: stop before building
-      # if any of the six signing secrets is missing.
       - name: Publishing needs the signing secrets
         if: needs.pick.outputs.publish == 'true'
         env:
@@ -118,28 +89,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.pick.outputs.sha }}
-      # The app comes from the picked commit, but the packaging (assets/dmg)
-      # from this workflow's own commit: the picked commit can be older than
-      # the packaging. The volume icon (assets/icon) stays the picked commit's,
-      # like the app's own icon.
       - name: Packaging from this workflow's commit
         if: needs.pick.outputs.sha != github.sha
         run: |
           git fetch -q --depth=1 origin ${{ github.sha }}
           git checkout ${{ github.sha }} -- assets/dmg
-      # The built commit's time, for the manifest: the app compares it with
-      # its own so it never offers an older build.
       - name: Commit time
         id: committed
         run: echo "committed=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd)" >> "$GITHUB_OUTPUT"
       - name: Toolchain
         run: rustup toolchain install
-      # Fails if EndeavorMCP's Helpers release has no build for the pinned
-      # commit, rather than shipping an app that can't reach Linux servers.
-      # That happens when Helpers never built that commit, or when its build
-      # was pruned (scripts/prune-helpers.sh keeps the last 10 pins on main).
-      # The build embeds that build's key, so it downloads the helper for a
-      # server it doesn't carry one for, an Intel Mac's say (src/remote.rs).
       - name: Linux servers' helpers
         run: |
           scripts/helpers.sh --fetch-only || {
@@ -147,17 +106,12 @@ jobs:
             exit 1
           }
           key=$(scripts/helpers.sh --key)
-          # The build must carry its helpers' checksums (EndeavorMCP#422).
           scripts/pinned-sums.sh "$key"
           echo "ENDEAVOR_RELEASE_KEY=$key" >> "$GITHUB_ENV"
-      # A nightly checks nightly.json for a newer build and updates itself
-      # (src/updater.rs); a build from source doesn't.
       - name: Bundle
         env:
           ENDEAVOR_CHANNEL: nightly
         run: scripts/bundle.sh
-      # A throwaway keychain holding only the Developer ID certificate, deleted
-      # at the end of the job. Nothing secret is echoed.
       - name: Signing keychain
         id: signing
         if: env.SIGN == 'true'
@@ -181,10 +135,6 @@ jobs:
           [ -n "$id" ] || { echo "::error::The certificate in MACOS_CERT_P12 isn't a Developer ID Application certificate for APPLE_TEAM_ID."; exit 1; }
           echo "SIGN_ID=$id" >> "$GITHUB_ENV"
           echo "signed=true" >> "$GITHUB_OUTPUT"
-      # Inside out: every Mach-O file in the app (this Mac's server helper),
-      # then the app. Hardened runtime with no entitlements: the app only
-      # starts other programs (Julia, Node, the agents) and shows WKWebView,
-      # whose web content runs in WebKit's own processes.
       - name: Sign the app
         if: env.SIGN == 'true'
         run: |
@@ -195,10 +145,6 @@ jobs:
           done
           codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$app"
           codesign --verify --strict --deep "$app"
-      # A disk image whose window shows the splash scene (assets/dmg), the app
-      # and a link to Applications. dmgbuild writes the window's layout itself,
-      # so it doesn't need Finder, and copies the app with ditto, which keeps
-      # its signature.
       - name: Disk image
         run: |
           python3 -m venv target/dmgbuild
@@ -229,9 +175,6 @@ jobs:
             exit 1
           fi
           rm -f "$key"
-          # Stapling fetches the ticket from Apple's CloudKit, which drops the
-          # connection now and then, sometimes for hours (10-17, and twice on
-          # 10-22). Try again for about a quarter of an hour before failing.
           for wait in 30 60 120 240 480 0; do
             xcrun stapler staple "$dmg" && break
             [ "$wait" != 0 ] || { echo "::error::Stapling failed six times."; exit 1; }
@@ -249,9 +192,6 @@ jobs:
           test -f /tmp/endeavor-dmg/.DS_Store
           if [ "$SIGN" = true ]; then spctl --assess --type execute -v /tmp/endeavor-dmg/Endeavor.app; fi
           hdiutil detach /tmp/endeavor-dmg
-      # What a user sees on opening it, for review on pull requests. Hosted
-      # runners have a desktop, but Finder there can be slow or refuse, so a
-      # missing screenshot doesn't fail the build.
       - name: Screenshot of its window
         if: github.event_name == 'pull_request'
         continue-on-error: true
@@ -286,7 +226,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
       SHA: ${{ needs.pick.outputs.sha }}
     steps:
-      # Only for scripts/nightly-manifest.sh, from this workflow's commit.
       - uses: actions/checkout@v4
         with:
           path: src
@@ -307,8 +246,6 @@ jobs:
       - name: Publish
         run: |
           set -eu
-          # The mac job already refuses to build unsigned for a publishing
-          # run; this is the last check before anything goes out.
           if [ "${{ needs.mac.outputs.signed }}" != true ]; then
             echo "::error::The Mac build isn't signed. Nothing was published."
             exit 1
@@ -321,20 +258,12 @@ jobs:
           - **Windows** (10 or 11, 64-bit): run Endeavor-windows-x86_64-setup.exe. It isn't signed, so Windows may say it protected your PC: click More info, then Run anyway.
           - **Linux**: build it from source (docs/development.md).
           EOF
-          # Written first, so a bad input stops the run before the release
-          # changes.
           src/scripts/nightly-manifest.sh dist "$SHA" "${{ needs.mac.outputs.committed }}" > nightly.json
           cat nightly.json
           if ! gh release view nightly >/dev/null 2>&1; then
             gh release create nightly --prerelease --title "Nightly build" --notes-file notes.md --target "$SHA"
           fi
           gh release upload nightly dist/* --clobber
-          # The manifest once the files it names are up: an app that reads it
-          # earlier sees the previous build's manifest, or a hash that doesn't
-          # match yet, and keeps its build until the next check.
           gh release upload nightly nightly.json --clobber
-          # The tag moves last, so it means "this build is fully published":
-          # if anything above failed, it still names the old commit and the
-          # next scheduled run tries again (pick skips when they're equal).
           gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
           gh release edit nightly --prerelease --title "Nightly build" --notes-file notes.md

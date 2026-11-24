@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""julia-smoke.py ENDEAVOR [--helper] [--server HOST]: run one real Julia
-notebook through the app's runtime, as an agent would. Starts `ENDEAVOR
-[--helper] mcp` (the stdio MCP server the plugin runs; the app's exe is the
-helper with `--helper`), makes a notebook, runs a cell, reads its output,
-closes the notebook and stops the runtime. Fails, with what the runtime said,
-if a step doesn't do what it should.
-
-With `--server HOST` (an ssh alias), the notebook runs on that server instead,
-as after the app's "Add server": `add_machine`, which installs Endeavor's
-program there from the Helpers release, then `use_machine`, which may install
-Julia there too. The script says yes to each install question, as the user
-would in the dialog. At the end it stops Endeavor on the server.
-
-Used by .github/workflows/windows-julia.yml and windows-server.yml, and runs
-on any platform."""
-
 import json
 import os
 import subprocess
@@ -23,7 +7,6 @@ import tempfile
 import threading
 import time
 
-# A first run starts Julia and installs Pluto into the depot: minutes.
 STEP_TIMEOUT = 1200
 
 
@@ -35,7 +18,6 @@ def main():
         host = extra[at + 1]
         del extra[at:at + 2]
     folder = tempfile.mkdtemp(prefix="endeavor-smoke-")
-    # On the server, relative to the session's folder there (`use_machine`'s `folder`).
     path = "smoke.jl" if host else os.path.join(folder, "smoke.jl")
     server = subprocess.Popen([exe, *extra, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=folder)
     replies = {}
@@ -47,7 +29,6 @@ def main():
                 message = json.loads(line)
             except ValueError:
                 continue
-            # The front asks the user before it installs anything (MCP elicitation): yes.
             if message.get("method") == "elicitation/create" and "id" in message:
                 print(f"Asked: {message.get('params', {}).get('message', '')[:300]}  Answering yes.", flush=True)
                 send({"jsonrpc": "2.0", "id": message["id"], "result": {"action": "accept", "content": {}}})
@@ -91,14 +72,11 @@ def main():
                 answer = json.loads(text)
             except ValueError:
                 answer = text
-            # Julia is starting, R is installing or the notebook is still opening (a cold server):
-            # the runtime says to make the same call again.
             error = str(answer.get("error", "")) if isinstance(answer, dict) else ""
             again = error.endswith("_starting") or error in ("r_installing", "notebook_opening")
             if not again or time.monotonic() - started > STEP_TIMEOUT:
                 break
             print(f"{tool}: {error} ({time.monotonic() - started:.0f} s)", flush=True)
-            # Most of these wait in the call itself; a pause keeps one that answers at once from spinning.
             time.sleep(2)
         print(f"{tool} ({time.monotonic() - started:.0f} s): {text[:400]}", flush=True)
         if result.get("isError") or (isinstance(answer, dict) and "error" in answer):
@@ -106,7 +84,6 @@ def main():
         return answer
 
     try:
-        # A client that can show a form, so the server's installs are asked about, not refused.
         capabilities = {"elicitation": {}} if host else {}
         request("initialize", {"protocolVersion": "2025-06-18", "capabilities": capabilities, "clientInfo": {"name": "julia-smoke", "version": "1"}})
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -114,13 +91,11 @@ def main():
             on_server(call, host)
         made = call("new_notebook", path=path)
         notebook = find(made, "notebook_id") or fail(f"new_notebook gave no notebook_id: {made}")
-        # A new notebook has one empty cell; an edit needs a read first.
         order = call("get_cell_order", notebook_id=notebook)
         cells = find(order, "cell_ids") or find(order, "cells") or fail(f"get_cell_order gave no cells: {order}")
         cell = cells[0] if isinstance(cells[0], str) else find(cells[0], "cell_id")
         call("read_cell", notebook_id=notebook, cell_id=cell)
         call("edit_cell", notebook_id=notebook, cell_id=cell, code="smoke = sum(1:10) * 2", run_after=True)
-        # The first run precompiles first; the cell waits in the queue meanwhile.
         started = time.monotonic()
         while True:
             read_back = call("read_cell", notebook_id=notebook, cell_id=cell)
@@ -149,8 +124,6 @@ MACHINE = "smoke-server"
 
 
 def on_server(call, host):
-    """Add `host` as a machine and put the session's notebooks there, as the app's "Add server"
-    does. Each install question is answered yes by `read`."""
     started = time.monotonic()
     install = False
     while True:
@@ -158,7 +131,6 @@ def on_server(call, host):
         state = added.get("state") if isinstance(added, dict) else None
         if state == "connected":
             break
-        # Where the front didn't ask in a dialog itself: the user's yes, as the app's Install button.
         if state == "needs_install" and not install:
             install = True
             continue
@@ -166,13 +138,11 @@ def on_server(call, host):
             fail(f"add_machine didn't connect: {added}")
     used = call("use_machine", machine=MACHINE, folder="/tmp/endeavor-smoke", install=True)
     state = used.get("state") if isinstance(used, dict) else None
-    # `starting`: the notebook tools wait for it (`call` retries while they say it's starting).
     if state not in ("ready", "starting"):
         fail(f"use_machine: {used}")
 
 
 def find(value, key):
-    """The first `key` anywhere in a tool's JSON answer."""
     if isinstance(value, dict):
         if key in value:
             return value[key]

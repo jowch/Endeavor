@@ -1,7 +1,3 @@
-// Checks every internal link and asset reference in the built site: the target
-// must exist under the base path, and a #fragment must match an id on the
-// target page. starlight-links-validator can't do this here, because it maps
-// pages from src/content/docs and the guide lives in ../docs/guide.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +37,6 @@ for (const file of htmlFiles(dist)) {
 	const pageUrl = new URL(base.slice(0, -1) + page, site);
 	const html = readFileSync(file, 'utf8');
 	for (const [tag] of html.matchAll(/<(?:a|link|script|img|source|meta)\b[^>]*>/g)) {
-		// GitHub Pages serves 404.html for any missing path, so its canonical URL has no file.
 		if (page === '/404.html' && tag.includes('rel="canonical"')) continue;
 		const isImageMeta = /\s(?:property|name)="(?:og:image|twitter:image)"/.test(tag);
 		for (const [, attr, raw] of tag.matchAll(/\s(href|src|srcset|content)="([^"]*)"/g)) {

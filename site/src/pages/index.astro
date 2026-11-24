@@ -251,7 +251,6 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		top: 12px;
 	}
 
-	/* The night sky stays dark in both appearances, as in the app's setup window. */
 	.sky {
 		--link: #ff8c57;
 		--focus: #e08a5e;
@@ -335,7 +334,6 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		text-decoration: none;
 		line-height: 1.3;
 	}
-	/* Phones can't run the app: the install guide instead of the downloads. */
 	.button.phone {
 		display: none;
 	}
@@ -363,7 +361,6 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 		background: rgb(255 255 255 / 0.08);
 	}
 
-	/* The "Installing with an agent?" block (site/agent-install.md): collapsed, but in the page's text. */
 	.agents {
 		width: 100%;
 		max-width: 44rem;
@@ -390,8 +387,6 @@ const logoWidth = (height: number) => Math.round((height * logoDark.width) / log
 	.agents details > :not(summary) {
 		margin: 14px 18px;
 	}
-	/* Code blocks come as Expressive Code's terminal frames (Starlight's), whose figure is also
-	   .frame and whose colours follow Starlight's theme, which this page doesn't set. Plain blocks here. */
 	.agents .expressive-code {
 		margin: 8px 18px 14px;
 	}

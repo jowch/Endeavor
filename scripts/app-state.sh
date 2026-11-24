@@ -1,9 +1,4 @@
 #!/bin/sh
-# app-state.sh [JQ_FILTER]: print what a running debug build of Endeavor shows,
-# as JSON, or the part a jq filter picks (`scripts/app-state.sh .window.screen`).
-#
-# Start the app with ENDEAVOR_STATE_REQUEST and ENDEAVOR_STATE_OUT set to two
-# file paths, and run this with the same two set. See docs/testing.md.
 set -eu
 : "${ENDEAVOR_STATE_REQUEST:?set it to the request file the app was started with}"
 : "${ENDEAVOR_STATE_OUT:?set it to the dump file the app was started with}"
