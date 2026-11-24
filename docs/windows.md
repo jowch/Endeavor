@@ -451,7 +451,9 @@ only with servers.
 - **Snapshot (S–M).** Use `CapturePreview` and crop, or the DevTools
   `Page.captureScreenshot` with a clip.
 - **Small items (S).**
-  - Reduce motion: `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)` (#11).
+  - Reduce motion: done, "Animation effects" with
+    `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`, watched through
+    `WM_SETTINGCHANGE` on a hidden window (`src/platform.rs`).
   - Open a URL: done, with `ShellExecuteW` (`src/signin.rs`).
   - Set a WebView2 data folder: the default, next to the exe, isn't writable
     under Program Files.
@@ -470,9 +472,9 @@ only with servers.
   hand in cmd or PowerShell (for example with `--helper` while debugging),
   `endeavor.exe` returns to the prompt at once and prints nothing there; pipe
   its output (`2>&1 | Out-Host`) to see it.
-- **Network-change watch (S).** Only macOS and Linux versions exist
-  (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
-  `INetworkListManager`.
+- **Network-change watch: done.** `src/network.rs` listens with
+  `NotifyIpInterfaceChange` and `NotifyRouteChange2`, and counts the network
+  as up while a default route sits on an interface that is up.
 - **Title bar: native for now.** Windows keeps its own title bar, with the
   window's buttons, above the column headers. Drawing the buttons in the
   sidebar's header instead (GPUI's `WindowControlArea`) would save its height.
