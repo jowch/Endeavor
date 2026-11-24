@@ -1485,15 +1485,23 @@ ${text.value}` : sent.comment;
   function besideRail(selector, left) {
     return [...document.querySelectorAll(selector)].map((el2) => el2.getBoundingClientRect()).filter((r) => r.height > 0 && r.right > left - CLEAR_OF_CONTROLS);
   }
+  function shownDrawer() {
+    const drawer2 = document.querySelector('html[data-endeavor-drawer] #endeavor-drawer, html[data-endeavor-drawer="docs"] [data-testid=helper]');
+    return drawer2 && drawer2.offsetHeight ? drawer2.getBoundingClientRect() : null;
+  }
   function place() {
     const s = scroller();
     const f = frame2(s);
-    const gap = f.classic ? CLASSIC_GAP : OVERLAY_GAP;
-    const left = f.contentRight - gap - (WIDTH + 8);
+    const drawer2 = shownDrawer();
+    const beside = !!drawer2 && drawer2.left < f.contentRight && drawer2.top <= f.top;
+    const right = beside ? drawer2.left : f.contentRight;
+    const gap = beside || f.classic ? CLASSIC_GAP : OVERLAY_GAP;
+    const left = right - gap - (WIDTH + 8);
     const above = besideRail(PAGE_CONTROLS_ABOVE, left);
     const below = besideRail(PAGE_CONTROLS_BELOW, left);
+    const floor = drawer2 && !beside ? Math.min(drawer2.top, f.top + f.height) : f.top + f.height;
     const top = Math.max(f.top + 10, ...above.map((r) => r.bottom + CLEAR_OF_CONTROLS));
-    const bottom = Math.min(f.top + f.height - 10, ...below.map((r) => r.top - CLEAR_OF_CONTROLS));
+    const bottom = Math.min(floor - 10, ...below.map((r) => r.top - CLEAR_OF_CONTROLS));
     const height2 = Math.max(bottom - top, 0);
     rail.style.left = `${left}px`;
     rail.style.top = `${top}px`;
@@ -2179,6 +2187,8 @@ ${text.value}` : sent.comment;
 
   // src/drawer.ts
   var HEADER = 36;
+  var SIDE_WIDTH = 500;
+  var SIDE_FROM = 1300;
   var css12 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
@@ -2235,6 +2245,13 @@ ${text.value}` : sent.comment;
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
     display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] body { padding-bottom: 0; padding-right: ${SIDE_WIDTH}px; }
+  html[data-endeavor-drawer-side] #endeavor-drawer { left: auto; top: 0; width: ${SIDE_WIDTH}px; height: auto;
+    border-top: none; border-left: 1px solid var(--e-border); }
+  html[data-endeavor-drawer-side] #endeavor-drawer .grip { display: none; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] pluto-editor.fullscreen main > preamble #saveall-container { transform: none !important; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"][data-endeavor-drawer-side] #helpbox-wrapper {
+    left: auto; top: ${HEADER}px; width: ${SIDE_WIDTH}px; height: auto; }
   html[data-endeavor-look="endeavor"] pluto-helpbox { position: static; width: 100%; height: 100%; right: auto;
     border-radius: 0; box-shadow: none; background: var(--e-bg-page); }
   html[data-endeavor-look="endeavor"] pluto-helpbox > header { display: none; }
@@ -2245,7 +2262,7 @@ ${text.value}` : sent.comment;
   html[data-endeavor-look="endeavor"] pluto-helpbox > section h1 { font-size: 13px; margin: 4px 0 8px; }
   @media print {
     #endeavor-drawer, #endeavor-safe, #endeavor-rail, #helpbox-wrapper { display: none !important; }
-    html[data-endeavor-drawer] body { padding-bottom: 0; }
+    html[data-endeavor-drawer] body { padding-bottom: 0; padding-right: 0; }
   }
 `;
   var book = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M1 2.2h3.3c.9 0 1.7.7 1.7 1.6v6.4c0-.7-.6-1.2-1.3-1.2H1zM11 2.2H7.7c-.9 0-1.7.7-1.7 1.6v6.4c0-.7.6-1.2 1.3-1.2H11z"/></svg>`;
@@ -2272,6 +2289,12 @@ ${text.value}` : sent.comment;
     if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
     return clamped;
   }
+  var drawerAtSide = (width) => width >= SIDE_FROM;
+  function placeSide() {
+    if (drawerAtSide(window.innerWidth)) document.documentElement.dataset.endeavorDrawerSide = "";
+    else delete document.documentElement.dataset.endeavorDrawerSide;
+    redrawRail();
+  }
   var echoing = false;
   function openDrawer(next, byItself = false) {
     tab = next;
@@ -2285,6 +2308,7 @@ ${text.value}` : sent.comment;
     echoing = false;
     render();
     report();
+    redrawRail();
   }
   function pick(next) {
     openDrawer(next);
@@ -2359,6 +2383,8 @@ ${text.value}` : sent.comment;
     style2.textContent = css12;
     document.head.append(style2);
     setHeight(height());
+    placeSide();
+    window.addEventListener("resize", placeSide);
     drawer = document.createElement("div");
     drawer.id = "endeavor-drawer";
     drawer.dataset.endeavorUi = "";

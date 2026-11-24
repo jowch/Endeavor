@@ -91,3 +91,18 @@ test("each new install opens Packages again, but one the user closed stays close
   await install("installing", "not_installed");
   assert.equal(drawer(), "packages", "a later install opens it again");
 });
+
+test("the drawer sits at the right in a pane wide enough for the cells and 500px beside them, and at the bottom otherwise", async () => {
+  const p = await page(rNotebook({ status: "ready" }, "installed"));
+  const root = p.window.document.documentElement;
+  const resize = (width) => {
+    Object.defineProperty(p.window, "innerWidth", { value: width, configurable: true });
+    p.window.dispatchEvent(new p.window.Event("resize"));
+  };
+  resize(840);
+  assert.equal("endeavorDrawerSide" in root.dataset, false);
+  resize(1300);
+  assert.equal("endeavorDrawerSide" in root.dataset, true);
+  resize(1299);
+  assert.equal("endeavorDrawerSide" in root.dataset, false);
+});

@@ -1,8 +1,11 @@
 import { byUser, on, send } from "./bridge";
 import { context, current, every, notebookId, onNotebook, report, setDrawerSource, type Drawer } from "./state";
+import { redrawRail } from "./rail";
 import type { NotebookLike, StatusModel } from "./status";
 
 const HEADER = 36;
+const SIDE_WIDTH = 500;
+const SIDE_FROM = 1300;
 
 const css = `
   #endeavor-drawer { display: none; }
@@ -60,6 +63,13 @@ const css = `
   html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"] #helpbox-wrapper {
     display: block !important; position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto;
     height: calc(var(--endeavor-drawer-h) - ${HEADER}px); z-index: 71; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] body { padding-bottom: 0; padding-right: ${SIDE_WIDTH}px; }
+  html[data-endeavor-drawer-side] #endeavor-drawer { left: auto; top: 0; width: ${SIDE_WIDTH}px; height: auto;
+    border-top: none; border-left: 1px solid var(--e-border); }
+  html[data-endeavor-drawer-side] #endeavor-drawer .grip { display: none; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer][data-endeavor-drawer-side] pluto-editor.fullscreen main > preamble #saveall-container { transform: none !important; }
+  html[data-endeavor-look="endeavor"][data-endeavor-drawer="docs"][data-endeavor-drawer-side] #helpbox-wrapper {
+    left: auto; top: ${HEADER}px; width: ${SIDE_WIDTH}px; height: auto; }
   html[data-endeavor-look="endeavor"] pluto-helpbox { position: static; width: 100%; height: 100%; right: auto;
     border-radius: 0; box-shadow: none; background: var(--e-bg-page); }
   html[data-endeavor-look="endeavor"] pluto-helpbox > header { display: none; }
@@ -70,7 +80,7 @@ const css = `
   html[data-endeavor-look="endeavor"] pluto-helpbox > section h1 { font-size: 13px; margin: 4px 0 8px; }
   @media print {
     #endeavor-drawer, #endeavor-safe, #endeavor-rail, #helpbox-wrapper { display: none !important; }
-    html[data-endeavor-drawer] body { padding-bottom: 0; }
+    html[data-endeavor-drawer] body { padding-bottom: 0; padding-right: 0; }
   }
 `;
 
@@ -102,6 +112,14 @@ function setHeight(h: number, settle = true) {
   return clamped;
 }
 
+export const drawerAtSide = (width: number) => width >= SIDE_FROM;
+
+function placeSide() {
+  if (drawerAtSide(window.innerWidth)) document.documentElement.dataset.endeavorDrawerSide = "";
+  else delete document.documentElement.dataset.endeavorDrawerSide;
+  redrawRail();
+}
+
 let echoing = false;
 
 export function openDrawer(next: Drawer, byItself = false): void {
@@ -116,6 +134,7 @@ export function openDrawer(next: Drawer, byItself = false): void {
   echoing = false;
   render();
   report();
+  redrawRail();
 }
 
 function pick(next: Drawer): void {
@@ -207,6 +226,8 @@ export function initDrawer(): void {
   style.textContent = css;
   document.head.append(style);
   setHeight(height());
+  placeSide();
+  window.addEventListener("resize", placeSide);
 
   drawer = document.createElement("div");
   drawer.id = "endeavor-drawer";
