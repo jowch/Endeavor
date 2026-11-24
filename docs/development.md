@@ -30,7 +30,8 @@ missing" and starts nothing. To try a release build, bundle it (below).
 
 To keep the Linux helpers current by themselves, turn on the repo's git hooks
 once: `git config core.hooksPath .githooks`. After each pull or branch switch
-they fetch the helpers GitHub built for that commit.
+(not a checkout of single files) they fetch the helpers GitHub built for that
+commit.
 
 `scripts/helpers.sh` checks out the EndeavorMCP commit that `Cargo.lock`
 pins (in `target/endeavor-mcp`) and downloads the helper for Linux servers
