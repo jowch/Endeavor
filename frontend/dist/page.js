@@ -3055,6 +3055,19 @@ footer form#feedback { display: none !important; }
     if (onEmber()) syncTheme();
   }
 
+  // src/reconnected.ts
+  var RESUMED_ON_OPEN = "You have reconnected to an existing session.";
+  function dismissResumedBanners(root) {
+    for (const remove of root.querySelectorAll("[data-testid=remove-banner-button]")) {
+      const banner = remove.parentElement?.parentElement;
+      if (banner?.textContent?.includes(RESUMED_ON_OPEN)) remove.click();
+    }
+  }
+  function initDismissResumedBanner() {
+    dismissResumedBanners(document);
+    new MutationObserver(() => dismissResumedBanners(document)).observe(document.body, { childList: true, subtree: true });
+  }
+
   // src/main.ts
   function initOnMarimo() {
     initState();
@@ -3062,6 +3075,7 @@ footer form#feedback { display: none !important; }
     initQuote();
     initAskBox();
     initAnnotate();
+    initDismissResumedBanner();
     initDebug();
     send({ type: "ready" });
   }
