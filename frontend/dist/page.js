@@ -65,21 +65,21 @@
   }
   function cellCode(cell) {
     const content = cell?.querySelector(`${dom().input} .cm-content`);
-    const view = content?.cmTile?.root?.view;
-    if (view) return view.state.doc.toString();
+    const view2 = content?.cmTile?.root?.view;
+    if (view2) return view2.state.doc.toString();
     const lines = content ? [...content.querySelectorAll(".cm-line")].map((l) => l.textContent ?? "") : [];
     return lines.join("\n");
   }
   function reveal(ids) {
-    const cells = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
-    if (!cells.length) return sayGone();
-    cells[0].scrollIntoView({ block: "center", behavior: "smooth" });
-    for (const cell of cells) {
+    const cells2 = ids.map((id) => document.getElementById(id)).filter((c) => !!c);
+    if (!cells2.length) return sayGone();
+    cells2[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    for (const cell of cells2) {
       cell.classList.remove("fading");
       cell.classList.add("endeavor-flash");
     }
-    setTimeout(() => cells.forEach((c) => c.classList.add("fading")), 900);
-    setTimeout(() => cells.forEach((c) => c.classList.remove("endeavor-flash", "fading")), 1300);
+    setTimeout(() => cells2.forEach((c) => c.classList.add("fading")), 900);
+    setTimeout(() => cells2.forEach((c) => c.classList.remove("endeavor-flash", "fading")), 1300);
   }
   function initReveal() {
     const style2 = document.createElement("style");
@@ -447,9 +447,9 @@
   function outline(on2) {
     for (const cell of document.querySelectorAll("pluto-cell.endeavor-guard-show")) cell.classList.remove("endeavor-guard-show");
     if (!on2 || !shown) return;
-    const cells = shown.hit.map((w) => document.getElementById(w.id)).filter((c) => !!c);
-    cells[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    for (const cell of cells) cell.classList.add("endeavor-guard-show");
+    const cells2 = shown.hit.map((w) => document.getElementById(w.id)).filter((c) => !!c);
+    cells2[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    for (const cell of cells2) cell.classList.add("endeavor-guard-show");
   }
   function close() {
     outline(false);
@@ -1052,9 +1052,9 @@
   var state = null;
   function pointState() {
     const picks = state?.picks ?? [];
-    const cells = picks.flatMap((p) => p.pick.part === "box" ? p.pick.cells : [p.pick.cell]);
+    const cells2 = picks.flatMap((p) => p.pick.part === "box" ? p.pick.cells : [p.pick.cell]);
     return {
-      picked: [...new Set(cells)],
+      picked: [...new Set(cells2)],
       picks: picks.map((p) => pickSource(p.pick)),
       box: picks.some((p) => p.box),
       status: state?.status() ?? "",
@@ -1065,11 +1065,11 @@
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
-    const cells = () => [...document.querySelectorAll(dom().cell)];
+    const cells2 = () => [...document.querySelectorAll(dom().cell)];
     const style2 = document.createElement("style");
     style2.textContent = css5();
-    const frame2 = document.createElement("div");
-    frame2.id = "annotate-frame";
+    const frame3 = document.createElement("div");
+    frame3.id = "annotate-frame";
     const box2 = document.createElement("div");
     box2.id = "annotate-box";
     const tag = document.createElement("div");
@@ -1083,7 +1083,7 @@
     const text = field.text;
     bar2.append(field.root);
     document.head.append(style2);
-    document.body.append(frame2, box2, tag, hint, bar2);
+    document.body.append(frame3, box2, tag, hint, bar2);
     state = { picks, status: () => active() ? field.what.textContent ?? "" : "", comment: () => text.value };
     on("context", () => {
       const label = `Comment for ${context.agent}`;
@@ -1108,7 +1108,7 @@
       const [first, end] = [shown2[0].getBoundingClientRect(), shown2[shown2.length - 1].getBoundingClientRect()];
       return { left: first.left, top: first.top, right: Math.max(first.right, end.right), bottom: end.bottom };
     }
-    function place4() {
+    function place5() {
       const rect = lastRect();
       bar2.classList.toggle("placed", !!rect);
       if (!rect) {
@@ -1137,7 +1137,7 @@
       }
       drawBox([...picks].reverse().find((p) => p.box)?.box ?? null);
       field.setWhat("point", "", pickStatus(picks.map((p) => p.pick)));
-      place4();
+      place5();
     }
     function choose(next, add) {
       const at = picks.findIndex((p) => samePick(p, next));
@@ -1267,7 +1267,7 @@
         justDragged = true;
         setTimeout(() => justDragged = false, 0);
         if (done.lines) return choose(linesPick(done.lines.cell, done.lines.from, done.lines.to), done.add);
-        const under = cells().filter((c) => {
+        const under = cells2().filter((c) => {
           const r = pageBox(c.getBoundingClientRect());
           return drawn.left < r.right && r.left < drawn.right && drawn.top < r.bottom && r.top < drawn.bottom;
         });
@@ -1275,8 +1275,8 @@
       },
       true
     );
-    window.addEventListener("scroll", () => active() && place4(), true);
-    window.addEventListener("resize", () => active() && place4());
+    window.addEventListener("scroll", () => active() && place5(), true);
+    window.addEventListener("resize", () => active() && place5());
     window.addEventListener(
       "keydown",
       (e) => {
@@ -1377,11 +1377,11 @@ ${text.value}` : sent.comment;
     document.head.append(style2);
     on("context", (msg) => {
       style2.textContent = css6();
-      const cells = msg.ask_cells ?? [];
-      const changed = cells.join() !== asked.join();
-      asked = cells;
-      rerun = (msg.rerun_cells ?? []).filter((id) => !cells.includes(id));
-      needed = (msg.needed_ids ?? []).filter((id) => !cells.includes(id) && !rerun.includes(id));
+      const cells2 = msg.ask_cells ?? [];
+      const changed = cells2.join() !== asked.join();
+      asked = cells2;
+      rerun = (msg.rerun_cells ?? []).filter((id) => !cells2.includes(id));
+      needed = (msg.needed_ids ?? []).filter((id) => !cells2.includes(id) && !rerun.includes(id));
       apply();
       if (changed) watch();
     });
@@ -1410,35 +1410,169 @@ ${text.value}` : sent.comment;
   }
 
   // src/rail.ts
+  var WIDTH = 6;
+  var OVERLAY_GAP = 12;
+  var CLASSIC_GAP = 2;
+  var MIN_MARK = 2;
   var css7 = `
-  #endeavor-rail { position: fixed; right: 4px; top: 10px; bottom: 10px; width: 3px; z-index: 50; pointer-events: none; }
-  #endeavor-rail a { position: absolute; left: 0; right: 0; min-height: 4px; border-radius: 2px;
-    background: var(--e-accent); pointer-events: auto; cursor: pointer; }
-  #endeavor-rail a.user { background: var(--code-differs-cell-color, var(--e-you-stripe)); }
+  #endeavor-rail { position: fixed; width: ${WIDTH + 8}px; z-index: 50; cursor: pointer; touch-action: none; }
+  #endeavor-rail a { position: absolute; left: 4px; width: ${WIDTH}px; border-radius: 2px; min-height: ${MIN_MARK}px;
+    background: var(--e-you-stripe); cursor: pointer; }
+  #endeavor-rail a[data-state="pending"] { opacity: 0.28; }
+  #endeavor-rail a[data-state="running"] { background: var(--e-accent); animation: endeavor-rail-pulse 1s ease-in-out infinite alternate; }
+  #endeavor-rail a[data-state="claude"] { background: var(--e-accent); }
+  #endeavor-rail a[data-state="failed"] { background: var(--e-danger); }
+  @keyframes endeavor-rail-pulse { from { opacity: 1; } to { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { #endeavor-rail a[data-state="running"] { animation: none; } }
+  #endeavor-rail .view { position: absolute; left: 0; right: 0; border-radius: 4px; pointer-events: none;
+    background: color-mix(in srgb, var(--e-text-primary) 7%, transparent); border: 1px solid color-mix(in srgb, var(--e-text-primary) 16%, transparent); }
+  #endeavor-rail-tip { position: fixed; z-index: 51; transform: translateY(-50%); pointer-events: none; white-space: nowrap;
+    padding: 3px 8px; border-radius: 6px; background: var(--e-popover-bg); color: var(--e-text-primary);
+    border: 1px solid var(--e-popover-edge); box-shadow: 0 4px 12px var(--e-shadow-popover); font: 11.5px system-ui, -apple-system, sans-serif; }
+  #endeavor-rail-tip[hidden] { display: none; }
+  @media print { #endeavor-rail, #endeavor-rail-tip { display: none !important; } }
 `;
+  function runState(cell) {
+    if (cell.hasAttribute("data-endeavor-bar")) return "claude";
+    const has = (name) => cell.classList.contains(name);
+    if (onMarimo()) {
+      const status = cell.querySelector("[data-testid=cell-status][data-status], [data-status]")?.getAttribute("data-status");
+      if (status === "running") return "running";
+      if (status === "queued" || has("needs-run") || has("stale")) return "pending";
+      if (has("has-error") || has("stopped")) return "failed";
+      return "ran";
+    }
+    if (has("running")) return "running";
+    const rail2 = cell.getAttribute("data-rail");
+    if (has("queued") || has("code_differs") || has("not_run_yet") || has("stale") || rail2 === "due" || cell.getAttribute("data-endeavor") === "unrun") return "pending";
+    if (has("errored")) return "failed";
+    return "ran";
+  }
+  var stateWords = (state2) => ({ ran: "ran", pending: "not run yet", running: "running", failed: "failed", claude: `${context.agent} edited it, not run` })[state2] ?? "";
   var rail;
+  var view;
+  var tip;
+  var cells = [];
+  function scroller() {
+    const root = document.scrollingElement;
+    if (!onMarimo()) return root ?? document.documentElement;
+    let el2 = document.querySelector(dom().cell)?.parentElement ?? null;
+    while (el2 && el2 !== document.body) {
+      const overflow = getComputedStyle(el2).overflowY;
+      if ((overflow === "auto" || overflow === "scroll") && el2.scrollHeight > el2.clientHeight) return el2;
+      el2 = el2.parentElement;
+    }
+    return root ?? document.documentElement;
+  }
+  function frame2(s) {
+    if (s === document.scrollingElement || s === document.documentElement) {
+      const width = document.documentElement.clientWidth;
+      return { left: 0, top: 0, height: window.innerHeight, contentRight: width, classic: window.innerWidth - width > 0 };
+    }
+    const r = s.getBoundingClientRect();
+    return { left: r.left, top: r.top, height: s.clientHeight, contentRight: r.left + s.clientWidth, classic: s.offsetWidth - s.clientWidth > 0 };
+  }
+  function contentTop(cell, s) {
+    const outer = s === document.scrollingElement || s === document.documentElement ? 0 : s.getBoundingClientRect().top;
+    return cell.getBoundingClientRect().top - outer + s.scrollTop;
+  }
+  function place() {
+    const s = scroller();
+    const f = frame2(s);
+    const gap = f.classic ? CLASSIC_GAP : OVERLAY_GAP;
+    const height2 = Math.max(f.height - 20, 0);
+    rail.style.left = `${f.contentRight - gap - (WIDTH + 8)}px`;
+    rail.style.top = `${f.top + 10}px`;
+    rail.style.height = `${height2}px`;
+    return { s, height: height2, total: Math.max(s.scrollHeight, 1) };
+  }
   function draw() {
-    const marked = [...document.querySelectorAll('pluto-cell[data-endeavor-bar], pluto-cell[data-endeavor="unrun"], pluto-cell.code_differs')];
-    if (!marked.length) {
-      if (rail.firstChild) rail.replaceChildren();
+    cells = [...document.querySelectorAll(dom().cell)];
+    rail.hidden = cells.length === 0;
+    if (!cells.length) {
+      rail.querySelectorAll("a").forEach((a) => a.remove());
       return;
     }
-    const total = Math.max(document.documentElement.scrollHeight, 1);
-    rail.replaceChildren(
-      ...marked.map((cell) => {
-        const mark = document.createElement("a");
-        const top = cell.getBoundingClientRect().top + window.scrollY;
-        mark.style.top = `${100 * top / total}%`;
-        mark.style.height = `${100 * cell.offsetHeight / total}%`;
-        if (!cell.hasAttribute("data-endeavor-bar")) mark.className = "user";
-        mark.dataset.cell = cell.id;
-        mark.onclick = (e) => {
-          e.preventDefault();
-          cell.scrollIntoView({ block: "center", behavior: "smooth" });
-        };
-        return mark;
-      })
-    );
+    const { s, height: height2, total } = place();
+    const marks = cells.map((cell) => {
+      const mark = document.createElement("a");
+      mark.dataset.cell = dom().id(cell);
+      mark.dataset.state = runState(cell);
+      mark.style.top = `${contentTop(cell, s) / total * height2}px`;
+      mark.style.height = `${Math.max(MIN_MARK, cell.offsetHeight / total * height2 - 1)}px`;
+      return mark;
+    });
+    rail.replaceChildren(...marks, view);
+    follow();
+  }
+  function follow() {
+    const s = scroller();
+    const f = frame2(s);
+    const height2 = rail.clientHeight || parseFloat(rail.style.height) || 0;
+    const total = Math.max(s.scrollHeight, 1);
+    view.style.top = `${s.scrollTop / total * height2}px`;
+    view.style.height = `${Math.min(height2, f.height / total * height2)}px`;
+  }
+  function markAt(y) {
+    for (const mark of rail.querySelectorAll("a")) {
+      const top = parseFloat(mark.style.top);
+      if (y >= top - 2 && y <= top + parseFloat(mark.style.height) + 2) return mark;
+    }
+    return null;
+  }
+  function cellOf(mark) {
+    return cells.find((c) => dom().id(c) === mark.dataset.cell);
+  }
+  function codeOf(cell) {
+    const input = cell.querySelector(dom().input);
+    const lines = input?.querySelectorAll(".cm-line");
+    return lines?.length ? [...lines].map((l) => l.textContent ?? "").join("\n") : input?.textContent ?? "";
+  }
+  function showTip(mark) {
+    const cell = mark && cellOf(mark);
+    if (!mark || !cell) {
+      tip.hidden = true;
+      return;
+    }
+    const r = mark.getBoundingClientRect();
+    tip.textContent = `${cellName(codeOf(cell))} \xB7 ${stateWords(mark.dataset.state)}`;
+    tip.hidden = false;
+    tip.style.top = `${r.top + r.height / 2}px`;
+    tip.style.left = "auto";
+    tip.style.right = `${window.innerWidth - rail.getBoundingClientRect().left + 4}px`;
+  }
+  function scrollToFraction(y, smooth) {
+    const s = scroller();
+    const height2 = rail.clientHeight || 1;
+    s.scrollTo({ top: y / height2 * s.scrollHeight - frame2(s).height / 2, behavior: smooth ? "smooth" : "auto" });
+  }
+  function wire() {
+    let dragging = false;
+    let downY = 0;
+    const y = (e) => e.clientY - rail.getBoundingClientRect().top;
+    rail.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      downY = y(e);
+      rail.setPointerCapture?.(e.pointerId);
+    });
+    rail.addEventListener("pointermove", (e) => {
+      if (dragging && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
+      showTip(markAt(y(e)));
+    });
+    rail.addEventListener("pointerup", () => {
+      dragging = false;
+    });
+    rail.addEventListener("pointerleave", () => {
+      if (!dragging) showTip(null);
+    });
+    rail.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (Math.abs(y(e) - downY) > 4) return;
+      const target = e.target.closest("#endeavor-rail a");
+      const cell = target && cellOf(target);
+      if (cell) cell.scrollIntoView({ block: "center", behavior: "smooth" });
+      else scrollToFraction(y(e), true);
+    });
   }
   function initRail() {
     const style2 = document.createElement("style");
@@ -1446,10 +1580,19 @@ ${text.value}` : sent.comment;
     rail = document.createElement("div");
     rail.id = "endeavor-rail";
     rail.dataset.endeavorUi = "";
+    rail.setAttribute("aria-hidden", "true");
+    view = document.createElement("div");
+    view.className = "view";
+    tip = document.createElement("div");
+    tip.id = "endeavor-rail-tip";
+    tip.dataset.endeavorUi = "";
+    tip.hidden = true;
     document.head.append(style2);
-    document.body.append(rail);
+    document.body.append(rail, tip);
+    wire();
     onRedraw(draw);
     window.addEventListener("resize", draw);
+    document.addEventListener("scroll", follow, { capture: true, passive: true });
   }
   var redrawRail = () => rail && draw();
 
@@ -1547,8 +1690,8 @@ ${text.value}` : sent.comment;
   #endeavor-reply-pill .key { font-size: 11px; color: var(--e-text-faint); }
 `;
   function lineOf(node, content) {
-    const view = content.cmTile?.root?.view;
-    if (view) return view.state.doc.lineAt(view.posAtDOM(node)).number;
+    const view2 = content.cmTile?.root?.view;
+    if (view2) return view2.state.doc.lineAt(view2.posAtDOM(node)).number;
     const line = (node instanceof Element ? node : node.parentElement)?.closest(".cm-line");
     return [...content.querySelectorAll(".cm-line")].indexOf(line) + 1;
   }
@@ -1567,12 +1710,12 @@ ${text.value}` : sent.comment;
     const code = cellCode(cell);
     const content = element?.closest(".cm-content");
     if (content) {
-      const view = content.cmTile?.root?.view;
-      const main = view?.state.selection.main;
+      const view2 = content.cmTile?.root?.view;
+      const main = view2?.state.selection.main;
       let [first, last2] = [lineOf(range.startContainer, content), lineOf(range.endContainer, content)];
-      if (main && !main.empty) [first, last2] = linesSelected(view.state.doc, main);
+      if (main && !main.empty) [first, last2] = linesSelected(view2.state.doc, main);
       if (first < 1 || last2 < first) return null;
-      const quote2 = main && !main.empty ? view.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last2).join("\n");
+      const quote2 = main && !main.empty ? view2.state.sliceDoc(main.from, main.to) : code.split("\n").slice(first - 1, last2).join("\n");
       if (!quote2.trim()) return null;
       return { cell, pick: { part: "lines", cell: cell.id, code, lines: [first, last2], text: quote2 }, quote: quote2, range: range.cloneRange() };
     }
@@ -1637,7 +1780,7 @@ ${text.value}` : sent.comment;
   var open = null;
   var drafts = /* @__PURE__ */ new Map();
   var isEmpty = (cell) => !cellCode(cell).trim();
-  var cellOf = (t) => t.kind === "selection" ? t.found.cell : t.cell;
+  var cellOf2 = (t) => t.kind === "selection" ? t.found.cell : t.cell;
   var previous = (cell) => {
     let prev = cell.previousElementSibling;
     while (prev && prev.tagName !== "PLUTO-CELL") prev = prev.previousElementSibling;
@@ -1682,7 +1825,7 @@ ${text.value}` : sent.comment;
     const y = t.kind === "before" ? r.top - spacing / 2 : r.bottom + spacing / 2;
     return { left: r.left, top: y - 1, right: r.right, bottom: y + 1 };
   }
-  function place(o) {
+  function place2(o) {
     const pick2 = pickRect(o);
     if (o.line) Object.assign(o.line.style, { left: `${pick2.left}px`, top: `${pick2.top}px`, width: `${pick2.right - pick2.left}px` });
     const root = o.box.root;
@@ -1753,7 +1896,7 @@ ${text.value}` : sent.comment;
       document.body.append(line);
     } else {
       const inOutput = t.kind === "selection" && t.found.pick.part === "output";
-      marked = cellOf(t).querySelector(inOutput ? "pluto-output" : "pluto-input");
+      marked = cellOf2(t).querySelector(inOutput ? "pluto-output" : "pluto-input");
       marked?.classList.add("endeavor-asked");
     }
     document.body.append(box2.root);
@@ -1761,9 +1904,9 @@ ${text.value}` : sent.comment;
     const o = { target: t, box: box2, draft: key, marked, line, below: true };
     const pick2 = pickRect(o);
     o.below = barPlace(pick2, window.innerWidth, window.innerHeight, box2.root.offsetHeight).top === pick2.bottom + GAP;
-    place(o);
+    place2(o);
     open = o;
-    box2.text.addEventListener("input", () => open === o && place(o));
+    box2.text.addEventListener("input", () => open === o && place2(o));
     requestAnimationFrame(() => {
       box2.text.focus();
       if (draft) box2.text.select();
@@ -1799,12 +1942,12 @@ ${text.value}` : sent.comment;
     document.addEventListener("mousedown", (e) => {
       if (open && !open.box.root.contains(e.target)) closeAsk(false);
     });
-    window.addEventListener("resize", () => open && place(open));
-    window.addEventListener("scroll", () => open && place(open), true);
+    window.addEventListener("resize", () => open && place2(open));
+    window.addEventListener("scroll", () => open && place2(open), true);
     onRedraw(() => {
-      const cells = [...document.querySelectorAll("pluto-cell")];
-      cells.forEach((cell, i) => {
-        const places = i === cells.length - 1 ? ["before", "after"] : ["before"];
+      const cells2 = [...document.querySelectorAll("pluto-cell")];
+      cells2.forEach((cell, i) => {
+        const places = i === cells2.length - 1 ? ["before", "after"] : ["before"];
         for (const where of places) {
           if (cell.querySelector(`:scope > .endeavor-add-agent.${where}`)) continue;
           const add = cell.querySelector(`:scope > button.add_cell.${where}`);
@@ -1819,9 +1962,9 @@ ${text.value}` : sent.comment;
         }
       });
       for (const stale of document.querySelectorAll("pluto-cell:not(:last-of-type) > .endeavor-add-agent.after")) stale.remove();
-      const ids = new Set(cells.map((c) => c.id));
+      const ids = new Set(cells2.map((c) => c.id));
       for (const key of drafts.keys()) if (!ids.has(key.split(":")[1])) drafts.delete(key);
-      if (open && !ids.has(cellOf(open.target).id)) closeAsk(false);
+      if (open && !ids.has(cellOf2(open.target).id)) closeAsk(false);
     });
   }
 
@@ -1899,14 +2042,14 @@ ${text.value}` : sent.comment;
     return [start, endA, endB];
   }
   var cm = null;
-  function classes(view) {
+  function classes(view2) {
     if (cm) return cm;
-    const EditorView = view.constructor;
+    const EditorView = view2.constructor;
     const StateEffect = EditorView.scrollIntoView(0).constructor;
-    const Compartment = [...view.state.config?.compartments?.keys() ?? []][0]?.constructor;
+    const Compartment = [...view2.state.config?.compartments?.keys() ?? []][0]?.constructor;
     if (!Compartment) return null;
-    for (const source of view.state.facet(EditorView.decorations)) {
-      const set = typeof source === "function" ? source(view) : source;
+    for (const source of view2.state.facet(EditorView.decorations)) {
+      const set = typeof source === "function" ? source(view2) : source;
       let c = set?.iter?.().value?.constructor;
       while (c && typeof c.line !== "function") c = Object.getPrototypeOf(c);
       if (c)
@@ -1915,7 +2058,7 @@ ${text.value}` : sent.comment;
           Compartment,
           appendConfig: StateEffect.appendConfig,
           decorations: EditorView.decorations,
-          extender: view.state.constructor.transactionExtender
+          extender: view2.state.constructor.transactionExtender
         };
     }
     return null;
@@ -1986,23 +2129,23 @@ ${text.value}` : sent.comment;
   var extension = (doc, before) => before === void 0 ? [] : cm.decorations.of(decorate(doc, before));
   function refresh() {
     for (const cell of document.querySelectorAll("pluto-cell")) {
-      const view = viewOf(cell);
-      if (!view || !classes(view)) continue;
+      const view2 = viewOf(cell);
+      if (!view2 || !classes(view2)) continue;
       const id = cell.id;
       const before = befores.get(id);
-      let entry = installed.get(view);
+      let entry = installed.get(view2);
       if (!entry) {
         if (before === void 0) continue;
         entry = { compartment: new cm.Compartment(), shown: before };
-        installed.set(view, entry);
+        installed.set(view2, entry);
         const { compartment } = entry;
-        const follow3 = cm.extender.of(
+        const follow4 = cm.extender.of(
           (tr) => tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(extension(tr.newDoc, befores.get(id))) } : null
         );
-        view.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow3]) });
+        view2.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view2.state.doc, before)), follow4]) });
       } else if (entry.shown !== before) {
         entry.shown = before;
-        view.dispatch({ effects: entry.compartment.reconfigure(extension(view.state.doc, before)) });
+        view2.dispatch({ effects: entry.compartment.reconfigure(extension(view2.state.doc, before)) });
       }
     }
   }
@@ -2185,7 +2328,7 @@ ${text.value}` : sent.comment;
       };
     }
   }
-  function follow(_, m) {
+  function follow2(_, m) {
     if (!m.install) autoDone = false;
     if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
       autoDone = true;
@@ -2212,18 +2355,18 @@ ${text.value}` : sent.comment;
     grip.onpointerdown = (e) => {
       grip.setPointerCapture(e.pointerId);
       let pending2 = null;
-      let frame2 = 0;
+      let frame3 = 0;
       const move = (m) => {
         pending2 = window.innerHeight - m.clientY;
-        if (frame2) return;
-        frame2 = requestAnimationFrame(() => {
-          frame2 = 0;
+        if (frame3) return;
+        frame3 = requestAnimationFrame(() => {
+          frame3 = 0;
           if (pending2 !== null) setHeight(pending2, false);
         });
       };
       const up = () => {
         grip.removeEventListener("pointermove", move);
-        if (frame2) cancelAnimationFrame(frame2);
+        if (frame3) cancelAnimationFrame(frame3);
         const h = setHeight(pending2 ?? drawer.offsetHeight);
         try {
           localStorage.setItem("endeavor-drawer-h", String(h));
@@ -2243,7 +2386,7 @@ ${text.value}` : sent.comment;
       lastHtml = "";
       render();
     });
-    onNotebook(follow);
+    onNotebook(follow2);
     every(1e3, () => current()?.model.busy && render());
   }
 
@@ -2348,10 +2491,10 @@ ${text.value}` : sent.comment;
     let found = {};
     if (!nb?.cell_results?.[id]?.errored) return found;
     const uses = nb.cell_dependencies?.[id]?.upstream_cells_map ?? {};
-    for (const [name, cells] of Object.entries(uses)) {
+    for (const [name, cells2] of Object.entries(uses)) {
       if (seen.includes(name)) continue;
       seen.push(name);
-      for (const up of cells) {
+      for (const up of cells2) {
         const deeper = failedUpstreams(nb, up, seen);
         found = { ...found, ...deeper };
         if (Object.keys(deeper).length === 0 && nb.cell_results?.[up]?.errored && up !== id) found[name] = up;
@@ -2451,7 +2594,7 @@ ${text.value}` : sent.comment;
       );
     }
   }
-  function place2(after, node) {
+  function place3(after, node) {
     if (after.nextElementSibling !== node) after.after(node);
   }
   function decorateOwn(error, cell, nb) {
@@ -2463,7 +2606,7 @@ ${text.value}` : sent.comment;
       row = el("div", "endeavor-ask");
       row.dataset.endeavorUi = "";
     }
-    place2(header, row);
+    place3(header, row);
     fillActions(row, cell, error);
     const frames = body2(nb, cell.id)?.stacktrace;
     const plutoTrace = error.querySelector(":scope > section");
@@ -2484,7 +2627,7 @@ ${text.value}` : sent.comment;
         decorate2();
       };
     }
-    place2(row, toggle);
+    place3(row, toggle);
     const label = `${frames ? traceLabel(frames, open3) : "Stack trace"} ${open3 ? "\u2304" : "\u203A"}`;
     if (toggle.textContent !== label) toggle.textContent = label;
     if (open3) error.querySelector(":scope > section.stacktrace-waiting-to-view button")?.click();
@@ -2501,7 +2644,7 @@ ${text.value}` : sent.comment;
       box2 = el("div", "endeavor-upstream");
       box2.dataset.endeavorUi = "";
     }
-    place2(header, box2);
+    place3(header, box2);
     if (box2.dataset.key === key) return;
     box2.dataset.key = key;
     const why = el("div", "why");
@@ -2767,7 +2910,7 @@ ${text.value}` : sent.comment;
       callout.querySelector(".run").onclick = (e) => byUser(e) && send({ type: "run_notebook", notebook: notebookId() });
     }
   }
-  function place3() {
+  function place4() {
     const notebook2 = document.querySelector("main pluto-notebook");
     if (notebook2 && callout.nextElementSibling !== notebook2) notebook2.before(callout);
   }
@@ -2779,7 +2922,7 @@ ${text.value}` : sent.comment;
     callout.id = "endeavor-safe";
     callout.dataset.endeavorUi = "";
     onNotebook(render2);
-    onRedraw(place3);
+    onRedraw(place4);
   }
 
   // src/theme.ts
@@ -3107,7 +3250,10 @@ footer form#feedback { display: none !important; }
   }
   function initDismissResumedBanner() {
     dismissResumedBanners(document);
-    new MutationObserver(() => dismissResumedBanners(document)).observe(document.body, { childList: true, subtree: true });
+    const ours = (r) => r.target instanceof Element && !!r.target.closest("[data-endeavor-ui]");
+    new MutationObserver((records) => {
+      if (!records.every(ours)) dismissResumedBanners(document);
+    }).observe(document.body, { childList: true, subtree: true });
   }
 
   // src/marimodocs.ts
@@ -3162,7 +3308,7 @@ footer form#feedback { display: none !important; }
     const target = document.activeElement ?? document.body;
     for (const type of ["keydown", "keyup"]) target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
   }
-  function follow2() {
+  function follow3() {
     if (sidebarDragging()) endSidebarDrag();
     const open3 = docsShown();
     if (open3) {
@@ -3185,9 +3331,9 @@ footer form#feedback { display: none !important; }
       return !!option;
     };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow2));
-    new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
-    follow2();
+    on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow3));
+    new MutationObserver(follow3).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
+    follow3();
   }
 
   // src/main.ts
@@ -3197,9 +3343,11 @@ footer form#feedback { display: none !important; }
     initQuote();
     initAskBox();
     initAnnotate();
+    initRail();
     initDismissResumedBanner();
     initMarimoDocs();
     initDebug();
+    watchRedraws();
     send({ type: "ready" });
   }
   function init() {
