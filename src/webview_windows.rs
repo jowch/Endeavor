@@ -1,7 +1,3 @@
-//! Windows' `src/webcontent.rs`: WebView2's process ending, its find in the
-//! page, whether it has the keyboard, and the app's shortcuts while it does.
-//! Linux's versions are `src/linux/webcontent.rs` and `src/linux/webkeys.rs`.
-
 use std::cell::{Cell, RefCell};
 
 use futures::StreamExt;
@@ -13,34 +9,21 @@ use webview2_com::{AcceleratorKeyPressedEventHandler, FindMatchCountChangedEvent
 use windows_core::{HSTRING, Interface};
 use wry::WebViewExtWindows;
 
-/// The menu bar's shortcuts on macOS, which take their keys before the page
-/// does (`src/webkeys.rs`), less ⌘M: Ctrl+M is Pluto's, and Windows has no
-/// such shortcut. WebView2 doesn't say which keys the page used, so the
-/// app's other Ctrl shortcuts stay with the page, unlike on Linux.
 const APP_FIRST: [&str; 10] = ["ctrl-q", "ctrl-,", "ctrl-b", "ctrl-=", "ctrl--", "ctrl-0", "ctrl-shift-e", "ctrl-f", "ctrl-g", "ctrl-shift-g"];
 
 thread_local! {
-    /// WebView2 has the keyboard: its controller's GotFocus came after its LostFocus.
     static FOCUSED: Cell<bool> = const { Cell::new(false) };
-    /// The web view had the keyboard when GPUI's window was last clicked.
     static HAD_KEYBOARD: Cell<bool> = const { Cell::new(false) };
     static FINDING: RefCell<Finding> = RefCell::new(Finding::default());
 }
 
-/// How long the match count must stay put before a search with no new count
-/// is answered from the count it has.
-// ponytail: a fixed settle time, and a late count from the search before can still answer a new one; untried on Windows.
 const SETTLE_MS: u32 = 400;
 
 #[derive(Default)]
 struct Finding {
-    /// The text last searched, so the same text goes to the next match.
     text: Option<String>,
-    /// The latest search's answer, until WebView2 has counted its matches.
     answer: Option<oneshot::Sender<bool>>,
-    /// The page's find session, with our count handler on it.
     find: Option<ICoreWebView2Find>,
-    /// The thread timer that answers once the count has settled (`settle`).
     timer: usize,
 }
 
@@ -60,11 +43,6 @@ fn answer(found: bool) {
     }
 }
 
-/// Answer the waiting search from the match count once it has stayed put for
-/// `SETTLE_MS`. The count WebView2 has when a search starts can still be the
-/// last search's, and it raises MatchCountChanged only for a change, so "no
-/// new count for a while" is what says the count is this search's: the same
-/// as before (two terms with the same count), or none (0 again).
 fn settle() {
     unsafe extern "system" fn settled(_: windows_sys::Win32::Foundation::HWND, _: u32, id: usize, _: u32) {
         // SAFETY: our own thread timer.
@@ -88,8 +66,6 @@ fn settle() {
     });
 }
 
-/// Keyboard handling for the notebook's web view in `window`: track its focus,
-/// and send the app's shortcuts to GPUI before the page sees them.
 pub fn attach(webview: &wry::WebView, window: &gpui::Window, cx: &mut App) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let controller = webview.controller();
@@ -137,16 +113,12 @@ pub fn attach(webview: &wry::WebView, window: &gpui::Window, cx: &mut App) {
     }
 }
 
-/// Dispatch each shortcut to `window`'s GPUI key handling. A shortcut that
-/// moves GPUI's focus (Ctrl+, focuses Settings' search, Ctrl+F the find bar)
-/// brings the keyboard to GPUI's window, `gpui`, too.
 fn forward(handle: AnyWindowHandle, gpui: usize, mut keys: UnboundedReceiver<Keystroke>, cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(keystroke) = keys.next().await {
             let _ = handle.update(cx, |_, window, cx| {
                 let before = window.focused(cx);
                 window.dispatch_keystroke(keystroke, cx);
-                // After the action's own deferred work.
                 cx.defer(move |cx| {
                     let _ = handle.update(cx, |_, window, cx| {
                         if window.focused(cx) != before {
@@ -166,8 +138,6 @@ fn key_down(key: i32) -> bool {
     unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState(key) < 0 }
 }
 
-/// The keystroke for a virtual key with the modifiers held now, for the keys
-/// the app's shortcuts use: letters, digits, `=`, `-` and `,`.
 fn keystroke(key: u32) -> Option<Keystroke> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     let name = match key as u16 {
@@ -193,9 +163,6 @@ fn app_first(keystroke: &Keystroke) -> bool {
     APP_FIRST.iter().filter_map(|s| Keystroke::parse(s).ok()).any(|k| k.modifiers == keystroke.modifiers && k.key == keystroke.key)
 }
 
-/// The page's renderer ended: a crash, or Windows ending it for memory.
-/// Loading the page again starts a new one. The browser process ending takes
-/// the whole web view with it, which a load doesn't bring back.
 pub fn on_process_ended(webview: &wry::WebView, ended: impl Fn() + 'static) {
     let mut token = 0i64;
     // SAFETY: as in `attach`.
@@ -220,7 +187,6 @@ pub fn url(webview: &wry::WebView) -> String {
     webview.url().unwrap_or_default()
 }
 
-/// The page's find session, made once; None on a WebView2 runtime too old to have one.
 fn find_session(webview: &wry::WebView) -> Option<ICoreWebView2Find> {
     if let Some(find) = FINDING.with(|f| f.borrow().find.clone()) {
         return Some(find);
@@ -236,8 +202,6 @@ fn find_session(webview: &wry::WebView) -> Option<ICoreWebView2Find> {
                 if let Some(find) = find {
                     find.MatchCount(&mut count)?;
                 }
-                // A count of matches is this search's. A count of 0 may be a
-                // reset on the way to one, so it waits to settle.
                 if count > 0 {
                     answer(true);
                 } else {
@@ -259,8 +223,6 @@ fn match_count(find: &ICoreWebView2Find) -> i32 {
     count
 }
 
-/// The next match of `text` (or the previous one), highlighting them all with
-/// WebView2's own find, without its find bar. Answers whether there's a match.
 pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Receiver<bool> {
     let (tx, rx) = oneshot::channel();
     let Some(find) = find_session(webview) else {
@@ -271,18 +233,15 @@ pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Rec
         let mut f = f.borrow_mut();
         let same = f.text.as_deref() == Some(text);
         if !same {
-            // The last search's settling would answer this one too soon.
             f.stop_timer();
         }
         f.text = Some(text.to_owned());
         same
     });
-    // A newer search replaces the one still counting; that one's answer goes.
     let counting = FINDING.with(|f| f.borrow_mut().answer.replace(tx).is_some());
     if same {
         // SAFETY: as in `attach`.
         let _ = unsafe { if backwards { find.FindPrevious() } else { find.FindNext() } };
-        // The same text has the same count, unless its search is still counting.
         if !counting {
             answer(match_count(&find) > 0);
         }
@@ -304,7 +263,6 @@ pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Rec
                     if backwards {
                         session.FindPrevious()?;
                     }
-                    // Not answered from the count here: it can still be the last search's.
                     settle();
                     Ok(())
                 })),
@@ -333,26 +291,15 @@ pub fn clear_find(_: &wry::WebView) {
 }
 
 thread_local! {
-    /// The web view `give_keyboard` moves the focus into once the key that asked has been handled.
     static FOCUS_NEXT: RefCell<Option<(ICoreWebView2Controller, ICoreWebView2)>> = const { RefCell::new(None) };
 }
 
-/// When the web view loses the keyboard, the page notes where its own focus
-/// and caret were, so `give_keyboard` can put them back.
 const SAVE_FOCUS: &str = "(() => { const e = document.activeElement, s = getSelection(); \
 window.__endeavorFocus = e && e !== document.body ? [e, s.rangeCount ? s.getRangeAt(0).cloneRange() : null] : null })()";
 
-/// Put the page's focus and caret back where they were. Nothing in the page
-/// can have taken the focus meanwhile but find, since the keyboard was elsewhere.
 const RESTORE_FOCUS: &str = "(() => { const f = window.__endeavorFocus; if (!f || !f[0].isConnected) return; \
 if (document.activeElement !== f[0]) f[0].focus(); if (f[1]) { const s = getSelection(); s.removeAllRanges(); s.addRange(f[1]) } })()";
 
-/// Give the web view the keyboard, with the page's focus where it was. Esc in
-/// the find bar asks for it while GPUI is still handling that key, and a
-/// MoveFocus then left the keyboard nowhere (seen on Windows 10), so it's
-/// done once the key's messages are through. After a find, WebView2 gives the
-/// keyboard back to the page but not to the cell it was in (also seen on
-/// Windows 10), so the page puts its own focus back.
 pub fn give_keyboard(webview: &wry::WebView) {
     unsafe extern "system" fn focus_now(_: windows_sys::Win32::Foundation::HWND, _: u32, id: usize, _: u32) {
         // SAFETY: our own thread timer.
@@ -374,20 +321,14 @@ pub fn has_keyboard(_: &wry::WebView) -> bool {
     FOCUSED.with(Cell::get)
 }
 
-/// GPUI's window was clicked (`web_view_hooks`), before it takes the keyboard.
 pub fn note_click() {
     HAD_KEYBOARD.with(|h| h.set(FOCUSED.with(Cell::get)));
 }
 
-/// The web view has the keyboard, or had it until GPUI's window was clicked.
 pub fn had_keyboard(_: &wry::WebView) -> bool {
     FOCUSED.with(Cell::get) || HAD_KEYBOARD.with(Cell::get)
 }
 
-/// Cut, Copy, Paste or Select All in the page, as its own keys would. WebView2
-/// has no editing commands, and a script's `execCommand` can't paste, so the
-/// keys go in through the DevTools protocol with the command each one runs
-/// (Linux's WebKit takes the command by name).
 pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
     let (key, command) = match action {
         gpui::OsAction::Cut => ('X', "cut"),
@@ -397,7 +338,6 @@ pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
         _ => return,
     };
     let page = webview.webview();
-    // Ctrl (modifiers 2), as the page would get it from the keyboard.
     let lower = key.to_ascii_lowercase();
     let down = format!(r#"{{"type":"keyDown","modifiers":2,"key":"{lower}","code":"Key{key}","windowsVirtualKeyCode":{},"commands":["{command}"]}}"#, key as u32);
     let up = format!(r#"{{"type":"keyUp","modifiers":2,"key":"{lower}","code":"Key{key}","windowsVirtualKeyCode":{}}}"#, key as u32);
@@ -412,8 +352,6 @@ pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
 
 #[cfg(test)]
 mod tests {
-    /// Every app-first key parses. Since gpui-pre 0.3.11 a `secondary-` key
-    /// fails to parse, and the `.ok()` above would drop it without a word.
     #[test]
     fn every_app_first_key_parses() {
         for key in super::APP_FIRST {

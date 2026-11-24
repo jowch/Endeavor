@@ -1,9 +1,3 @@
-//! A GPUI menu over the notebook (macOS: `src/overlay.rs`). The web view is an
-//! X child window on top of everything GPUI draws, so while a menu is open the
-//! window gets a hole where the menu is, with the X Shape extension: its
-//! bounding shape leaves the hole out, so GPUI shows through, and clicks there
-//! reach GPUI's window below.
-
 use std::cell::RefCell;
 use std::ffi::{c_int, c_ulong};
 
@@ -16,12 +10,8 @@ pub use crate::layer::Hole;
 #[derive(Default)]
 struct Holes {
     open: Vec<(Hole, Bounds<Pixels>)>,
-    /// A menu or popover is open somewhere: every click on the web view goes
-    /// to GPUI, so its click-outside handling can close it.
     dismiss: bool,
-    /// wry's container window around the web view, which the shape is set on.
     window: Option<gdk::Window>,
-    /// The cell picture's second web view's container window, while there is one (`set_second`).
     second: Option<gdk::Window>,
 }
 
@@ -29,8 +19,6 @@ thread_local! {
     static HOLES: RefCell<Holes> = RefCell::default();
 }
 
-/// wry's X window for the web view. wry places it in GDK's units, taking them
-/// to be GPUI's logical pixels.
 fn container(webview: &wry::WebView) -> Option<gdk::Window> {
     use wry::WebViewExtUnix;
     webview.webview().toplevel()?.window()
@@ -43,7 +31,6 @@ fn xrect(b: &Bounds<Pixels>, scale: f32) -> x11::xlib::XRectangle {
     x11::xlib::XRectangle { x: x as i16, y: y as i16, width: (right - x) as u16, height: (bottom - y) as u16 }
 }
 
-// From X11/extensions/shape.h.
 const SHAPE_BOUNDING: c_int = 0;
 const SHAPE_INPUT: c_int = 2;
 const SHAPE_SET: c_int = 0;
@@ -56,15 +43,12 @@ unsafe extern "C" {
     fn XShapeCombineMask(display: *mut x11::xlib::Display, window: c_ulong, kind: c_int, x: c_int, y: c_int, mask: c_ulong, op: c_int);
 }
 
-/// Set `kind` of the shape of `window`: everything, nothing, or everything
-/// but `holes` (in X's pixels).
 unsafe fn set_shape(display: *mut x11::xlib::Display, window: c_ulong, kind: c_int, shape: Shape) {
     unsafe {
         match shape {
             Shape::Whole => XShapeCombineMask(display, window, kind, 0, 0, 0, SHAPE_SET),
             Shape::Empty => XShapeCombineRectangles(display, window, kind, 0, 0, std::ptr::null_mut(), 0, SHAPE_SET, UNSORTED),
             Shape::Holes(holes) => {
-                // Past any window's size, so a resize keeps the rest whole.
                 let mut all = x11::xlib::XRectangle { x: 0, y: 0, width: u16::MAX, height: u16::MAX };
                 XShapeCombineRectangles(display, window, kind, 0, 0, &mut all, 1, SHAPE_SET, UNSORTED);
                 let mut holes = holes.to_vec();
@@ -83,7 +67,6 @@ enum Shape<'a> {
 
 fn apply(holes: &Holes) {
     let Some(display) = super::xdisplay() else { return };
-    // The second view has the same holes, so GPUI shows through both. It never takes a click.
     for (window, clicks) in [(&holes.window, !holes.dismiss), (&holes.second, false)] {
         let Some((window, xid)) = window.as_ref().and_then(|w| Some((w, super::xid_of(w)?))) else { continue };
         let scale = window.scale_factor() as f32;
@@ -108,18 +91,12 @@ fn update(webview: Option<&wry::WebView>, change: impl FnOnce(&mut Holes) -> boo
     });
 }
 
-/// A menu or popover open anywhere in the window, so a click on the web view
-/// should reach GPUI even outside any hole (`Workspace::dismissible_open`).
 pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
     update(Some(webview), |holes| std::mem::replace(&mut holes.dismiss, active) != active);
 }
 
-/// No see-through child windows without a compositor, so the web view isn't
-/// dimmed behind a panel on Linux.
 pub fn set_dimmed(_: &wry::WebView, _: bool) {}
 
-/// Cut `owner`'s hole in the web view at `hole` (relative to the web view's
-/// top-left corner), or close it with None. Other holes stay.
 pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>>) {
     update(Some(webview), |holes| {
         let before = holes.open.clone();
@@ -129,9 +106,6 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
     });
 }
 
-/// The cell picture's second web view (`cell_shot`), kept just behind the user's at the same
-/// place, or None once it goes. Every hole cut in the user's view is cut in it too, in the same
-/// call, so it never shows where GPUI draws a menu, a notice or a tip.
 pub fn set_second(other: Option<&wry::WebView>) {
     HOLES.with_borrow_mut(|holes| {
         holes.second = other.and_then(container);
@@ -139,19 +113,14 @@ pub fn set_second(other: Option<&wry::WebView>) {
     });
 }
 
-/// Whether the second view is registered (`set_second`). It isn't when its window wasn't
-/// there yet as it was made, and `cell_shot` registers it again then.
 pub fn has_second() -> bool {
     HOLES.with_borrow(|holes| holes.second.is_some())
 }
 
-/// wry's X window around `webview`, for `cell_shot` to place the second view.
 pub fn window_of(webview: &wry::WebView) -> Option<gdk::Window> {
     container(webview)
 }
 
-/// Whether X shows `window` and every window around it. wry maps and unmaps
-/// its windows with Xlib, behind GDK's back, so GDK's own answer can be stale.
 pub fn viewable(window: &gdk::Window) -> bool {
     let (Some(display), Some(xid)) = (super::xdisplay(), super::xid_of(window)) else { return false };
     let mut attributes = std::mem::MaybeUninit::<x11::xlib::XWindowAttributes>::zeroed();

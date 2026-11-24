@@ -1,6 +1,3 @@
-//! The Endeavor turtle, in profile facing right: a half-disc shell, two half-disc
-//! feet and a round head with one eye. Sizes are fractions of the shell radius.
-
 use std::f32::consts::PI;
 
 use gpui::*;
@@ -13,8 +10,6 @@ const HEAD_Y: f32 = -0.14;
 const FOOT_R: f32 = 0.21;
 const FEET_X: [f32; 2] = [-0.6, 0.4];
 
-/// Where the eye points: `eye_x` 1 looks ahead, 0 at the viewer, -1 back;
-/// `look` raises it; `dx`/`dy` move the head.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Gaze {
     pub eye_x: f32,
@@ -33,16 +28,12 @@ impl Gaze {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Pose {
-    /// The shell's height grows by this fraction.
     pub breathe: f32,
-    /// The body's lift off the feet (negative is up).
     pub bob: f32,
-    /// 1 open, near 0 shut.
     pub blink: f32,
     pub gaze: Gaze,
     pub head_scale: f32,
     pub head_behind: bool,
-    /// Each foot's (dx, dy) from rest, back foot first.
     pub feet: [(f32, f32); 2],
 }
 
@@ -53,13 +44,11 @@ impl Default for Pose {
 }
 
 impl Pose {
-    /// Feet a walk cycle's `phase` along: each lifts in turn and swings forward while up.
     pub fn walk(mut self, phase: f32, stride: f32, lift: f32) -> Self {
         self.feet = [0., PI].map(|o| (-(phase + o).cos() * stride, -(phase + o).sin().max(0.) * lift));
         self
     }
 
-    /// The head drawn `k` of the way into the shell (1: hidden but for a sliver).
     pub fn tuck(mut self, k: f32) -> Self {
         if k > 0. {
             self.head_behind = true;
@@ -73,9 +62,6 @@ impl Pose {
     }
 }
 
-/// The empty notebook pages' peek, `t` seconds in: one cycle every 4.2 s, mostly
-/// resting with the head out; then it tucks into the shell, peeks out looking
-/// up, and pops out again.
 pub fn peek(t: f32) -> Pose {
     const PERIOD: f32 = 4.2;
     let u = t.rem_euclid(PERIOD);
@@ -92,7 +78,6 @@ pub fn peek(t: f32) -> Pose {
     };
     let mut pose = Pose { blink: if tuck == 0. { blink_at(t, 3.3, 0.9) } else { 1. }, gaze, ..Pose::default() }.tuck(tuck);
     if tuck > 0. && tuck < 0.6 {
-        // Peeking: the eye stays open under the shell's rim.
         pose.blink = 1.;
     }
     pose
@@ -102,26 +87,21 @@ pub fn lerp(a: f32, b: f32, k: f32) -> f32 {
     a + (b - a) * k
 }
 
-/// Smoothstep of `k` clamped to 0..1.
 pub fn ease(k: f32) -> f32 {
     let k = k.clamp(0., 1.);
     k * k * (3. - 2. * k)
 }
 
-/// Eye openness at `t` seconds for a blink every `period` seconds.
 pub fn blink_at(t: f32, period: f32, offset: f32) -> f32 {
     const SHUT: f32 = 0.16;
     let u = (t + offset).rem_euclid(period);
     if u < SHUT { (1. - 2. * u / SHUT).abs() } else { 1. }
 }
 
-/// A filled ellipse `rx` by `ry`, flattened to a pill when they differ.
 pub fn disc(window: &mut Window, center: Point<Pixels>, (rx, ry): (f32, f32), color: impl Into<Background>) {
     window.paint_quad(fill(Bounds::centered_at(center, size(px(2. * rx), px(2. * ry))), color).corner_radii(px(rx.min(ry))));
 }
 
-/// A filled half ellipse from angle `from` to `from + PI` (y down, so PI is the top
-/// half), closed with a straight edge.
 fn half_disc(window: &mut Window, center: Point<Pixels>, (rx, ry): (f32, f32), from: f32, color: impl Into<Background>) {
     const STEPS: usize = 48;
     let to = from + PI;
@@ -138,7 +118,6 @@ fn half_disc(window: &mut Window, center: Point<Pixels>, (rx, ry): (f32, f32), f
     }
 }
 
-/// The turtle standing with its feet on `ground`, shell radius `r` px.
 pub fn paint(window: &mut Window, ground: Point<Pixels>, r: f32, p: &Pose) {
     let at = |x: f32, y: f32| point(ground.x + px(x * r), ground.y + px(y * r));
     for (fx, (dx, dy)) in FEET_X.into_iter().zip(p.feet) {

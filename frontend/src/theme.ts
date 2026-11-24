@@ -306,11 +306,15 @@ export function juliaMonoFaces(from: "app" | "web"): string {
     .join("");
 }
 
-export function initTheme(fontsFrom: "app" | "web" = "app"): void {
+export function initTokens(): void {
   const tokenSheet = document.createElement("style");
   tokenSheet.id = "endeavor-tokens";
   tokenSheet.textContent = tokens;
   document.head.append(tokenSheet);
+}
+
+export function initTheme(fontsFrom: "app" | "web" = "app"): void {
+  initTokens();
 
   const fonts = document.createElement("style");
   fonts.id = "endeavor-fonts";

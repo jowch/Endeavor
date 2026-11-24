@@ -1,7 +1,3 @@
-//! The app's own line to the runtime's tools: its loopback `/endeavor/call`
-//! endpoint (MCP JSON-RPC). Used for app-side checks that shouldn't depend on
-//! the agent, like the end-of-turn run-state warning.
-
 use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -10,29 +6,19 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use wire::backend::Backend;
 
-/// One runtime as its host's listener serves it: the MCP URL the agent's
-/// config carries (its host is the app's way in too), the bearer token every
-/// path but the pages requires, and the pages' token. They stay the same
-/// across that host's runtimes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bridge {
     pub url: String,
     pub token: String,
-    /// What opens Pluto's pages (EndeavorMCP interface 8); `token` no longer does.
-    /// An older runtime has none and takes `token` there.
     pub page_token: String,
 }
 
 impl Bridge {
-    /// `127.0.0.1:PORT` from the bridge URL `http://127.0.0.1:PORT/mcp`.
     fn host(&self) -> Result<&str, String> {
         self.url.strip_prefix("http://").and_then(|rest| rest.split('/').next()).ok_or_else(|| format!("bad MCP url {}", self.url))
     }
 }
 
-/// Follow the runtime's notebook state (`GET /endeavor/events`): `on_event` gets
-/// `{"notebooks": [list_notebooks summary], "cells": {id: [cell states]}}` now and
-/// after every change, until the runtime goes away.
 pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Result<(), String> {
     let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
@@ -47,7 +33,6 @@ pub fn watch_notebooks(bridge: &Bridge, mut on_event: impl FnMut(Value)) -> Resu
     Ok(())
 }
 
-/// Call a runtime tool and return its decoded JSON result.
 pub fn call_tool(bridge: &Bridge, tool: &str, arguments: Value) -> Result<Value, String> {
     call_tool_waiting(bridge, tool, arguments, CALL_WAIT)
 }
@@ -60,17 +45,10 @@ fn call_tool_waiting(bridge: &Bridge, tool: &str, arguments: Value, wait: Durati
     serde_json::from_str(text).map_err(|e| format!("bad tool result: {e}"))
 }
 
-/// Set an agent session's policy in the runtime ("plan" refuses its notebook
-/// writes and runs, "ask" holds a run until the app answers, "auto" runs it);
-/// with `edits` (Manual) it holds a change to the notebook too. `owner` is
-/// the session's key, sent as its MCP header.
 pub fn set_policy(bridge: &Bridge, owner: u64, policy: &str, edits: bool) -> Result<(), String> {
     rpc(bridge, "endeavor/set_policy", json!({ "owner": owner.to_string(), "policy": policy, "asks": true, "edits": edits })).map(|_| ())
 }
 
-/// Answer a run the runtime holds (its ask `id`), with the cells the user's
-/// own run reached while it waited (each with its `last_run` before that run), and for
-/// `approve_install` the packages its card named, which the yes covers and no others.
 pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f64)], packages: Option<&[String]>) -> Result<(), String> {
     let user_ran: Vec<Value> = user_ran.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
     let mut params = json!({ "id": id, "allow": allow, "user_ran": user_ran });
@@ -80,32 +58,26 @@ pub fn answer_run(bridge: &Bridge, id: u64, allow: bool, user_ran: &[(String, f6
     app_call(bridge, "endeavor/answer_run", params).map(|_| ())
 }
 
-/// Bind an agent session (`owner`, its key) to its one notebook file; the runtime
-/// then refuses its opening, creating, editing or running any other.
 pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), String> {
     rpc(bridge, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
-/// The session `owner`'s working folder, where the runtime's `run_shell` runs
-/// by default. Paths here are the runtime machine's (`Place::path`).
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
-    // The core forgets kinds when it restarts, so every call says it.
-    let kind = crate::new_session::kind_name(kind);
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind })).map(|_| ())
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_session_folder", session_folder_params(owner, folder, kind, host)).map(|_| ())
 }
 
-/// Make `dir` the folder Pluto suggests when saving a new notebook.
+fn session_folder_params(owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> serde_json::Value {
+    json!({ "owner": owner.to_string(), "folder": folder, "kind": crate::new_session::kind_name(kind), "shows_python": crate::new_session::shows_python(host) })
+}
+
 pub fn set_folder(bridge: &Bridge, dir: &str) -> Result<(), String> {
     rpc(bridge, "endeavor/set_folder", json!({ "path": dir })).map(|_| ())
 }
 
-/// Stop open notebooks after `hours` with no activity; 0 never stops them.
 pub fn set_idle_limit(bridge: &Bridge, hours: f64) -> Result<(), String> {
     rpc(bridge, "endeavor/set_idle_limit", json!({ "hours": hours })).map(|_| ())
 }
 
-/// Notebooks the runtime stopped for being idle, from its event stream:
-/// (path, the idle limit in hours, whether it was in safe preview).
 pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
     event["idle_stopped"]
         .as_array()
@@ -115,9 +87,6 @@ pub fn idle_stopped(event: &serde_json::Value) -> Vec<(String, u64, bool)> {
         .collect()
 }
 
-/// Notebooks the runtime closed because their engine (R) ended, from its event stream:
-/// (path, the engine's language, why it ended, when in ms). Listed until each opens again.
-/// A runtime from before `ended_at` gives 0.
 pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String, u64)> {
     event["engine_ended"]
         .as_array()
@@ -127,22 +96,23 @@ pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String, u
         .collect()
 }
 
-/// R endings by path and when (`engine_ended`'s `ended_at`).
 pub type Endings = std::collections::HashSet<(String, u64)>;
 
-/// The endings in `event` that `last` (the endings of the last push, by path and time) didn't
-/// have, as (path, language, why), and the endings to keep for the next push. Keyed on the time
-/// too, so a notebook that opened again and whose R ended again between two pushes shows its
-/// second ending (#122).
+pub fn waits_to_run(notebooks: &serde_json::Value, path: &str) -> bool {
+    notebooks.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == false)
+}
+
+pub fn newly_allowed(before: &serde_json::Value, after: &serde_json::Value) -> Vec<String> {
+    let allowed = |list: &serde_json::Value, path: &str| list.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == true);
+    after.as_array().into_iter().flatten().filter_map(|nb| nb["path"].as_str()).filter(|path| waits_to_run(before, path) && allowed(after, path)).map(str::to_owned).collect()
+}
+
 pub fn new_endings(last: &Endings, event: &serde_json::Value) -> (Vec<(String, String, String)>, Endings) {
     let ended = engine_ended(event);
     let new = ended.iter().filter(|(path, _, _, at)| !last.contains(&(path.clone(), *at))).map(|(path, language, why, _)| (path.clone(), language.clone(), why.clone())).collect();
     (new, ended.into_iter().map(|(path, _, _, at)| (path, at)).collect())
 }
 
-/// The user pressed Stop in session `owner`: the runtime interrupts the runs that session
-/// started and that are still going, which it doesn't hear of from the agent when no tool
-/// call is under way. A runtime from before the call has nothing to stop.
 pub fn stop_session(bridge: &Bridge, owner: u64) -> Result<(), String> {
     match app_call(bridge, "endeavor/stop_session", json!({ "owner": owner.to_string() })) {
         Err(error) if error.starts_with("Method not found") => Ok(()),
@@ -150,15 +120,12 @@ pub fn stop_session(bridge: &Bridge, owner: u64) -> Result<(), String> {
     }
 }
 
-/// Shut down the open notebook at `path`. Returns whether it was in safe preview,
-/// or None if it wasn't open.
 pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String> {
     let reply = rpc(bridge, "endeavor/stop_notebook", json!({ "path": path }))?;
     let result = &reply["result"];
     Ok(result["stopped"].as_bool().unwrap_or(false).then(|| result["safe_preview"].as_bool().unwrap_or(false)))
 }
 
-/// An app-only bridge method's `result`, or its error message.
 fn app_call(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
     app_call_waiting(bridge, method, params, CALL_WAIT)
 }
@@ -171,15 +138,10 @@ fn app_call_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration
     }
 }
 
-/// Pluto's own Restart: a new process, then every cell runs. Refused in safe preview.
 pub fn restart_notebook(bridge: &Bridge, notebook_id: &str) -> Result<(), String> {
     app_call(bridge, "endeavor/restart_notebook", json!({ "notebook_id": notebook_id })).map(|_| ())
 }
 
-/// Restore on a turn's card: put `cells` (`ChangedCell::restore`) back as they
-/// were before the turn, all or nothing. Ok with the cells that changed since
-/// the turn, by id, when nothing was restored for that reason; empty when it
-/// was.
 pub fn restore_cells(bridge: &Bridge, notebook_id: &str, cells: Vec<Value>) -> Result<Vec<String>, String> {
     let result = match app_call(bridge, "endeavor/restore_cells", json!({ "notebook_id": notebook_id, "cells": cells })) {
         Err(error) if error.starts_with("Method not found") => return Err("This notebook's runtime is from an older Endeavor. Restart it, then try again.".into()),
@@ -190,43 +152,30 @@ pub fn restore_cells(bridge: &Bridge, notebook_id: &str, cells: Vec<Value>) -> R
     Ok(result["changed"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(str::to_owned)).collect())
 }
 
-/// The user's run reached `cells` (with each one's `last_run` before it),
-/// which the agent's waiting cards ask to run: an older runtime won't run
-/// them again for the approved calls. A runtime from this build hears it in
-/// the answer to its own ask instead (`answer_run`).
 pub fn run_anyway(bridge: &Bridge, notebook_id: &str, cells: &[(String, f64)]) -> Result<(), String> {
     let cells: Vec<Value> = cells.iter().map(|(id, last_run)| json!({ "cell_id": id, "last_run": last_run })).collect();
     app_call(bridge, "endeavor/run_anyway", json!({ "notebook_id": notebook_id, "cells": cells })).map(|_| ())
 }
 
-/// The result the runtime kept of session `owner`'s notebook call (`call_id`
-/// is the agent's id for it), `{content, isError}`, for an agent that didn't
-/// pass it on; none if the runtime has no such call.
 pub fn tool_result(bridge: &Bridge, owner: u64, call_id: &str, tool: &str, arguments: &Value) -> Result<Option<Value>, String> {
     let result = app_call(bridge, "endeavor/tool_result", json!({ "owner": owner.to_string(), "call_id": call_id, "tool": tool, "arguments": arguments }))?;
     Ok((!result.is_null()).then_some(result))
 }
 
-/// Rename or move an open notebook's file; returns its new path.
 pub fn move_notebook(bridge: &Bridge, notebook_id: &str, path: &str) -> Result<String, String> {
     let result = app_call(bridge, "endeavor/move_notebook", json!({ "notebook_id": notebook_id, "path": path }))?;
     result["path"].as_str().map(str::to_owned).ok_or_else(|| "no path in reply".into())
 }
 
-/// Whether a file is on the runtime's machine, and its modification time.
 pub fn file_info(bridge: &Bridge, path: &str) -> Result<Option<f64>, String> {
     let result = app_call(bridge, "endeavor/file_info", json!({ "path": path }))?;
     Ok(if result["exists"] == true { Some(result["modified"].as_f64().unwrap_or(0.)) } else { None })
 }
 
-/// Open the notebook at `path`, running it if `run`: `list_notebooks`' summary
-/// of it. Julia starts first if it isn't running; while it's still starting
-/// this says so (`julia_starting`).
 pub fn open_notebook(bridge: &Bridge, path: &str, run: bool) -> Result<Value, String> {
     answer(call_tool_waiting(bridge, "open_notebook", json!({ "path": path, "run_notebook": run }), JULIA_CALL_WAIT)?)
 }
 
-/// A tool's result, or the error it answers with, as an app call says it: `kind::message`.
 fn answer(result: Value) -> Result<Value, String> {
     match result["error"].as_str() {
         Some(kind) => Err(format!("{kind}::{}", result["message"].as_str().unwrap_or_default())),
@@ -234,27 +183,18 @@ fn answer(result: Value) -> Result<Value, String> {
     }
 }
 
-/// How long the app's calls wait for an answer.
 const CALL_WAIT: Duration = Duration::from_secs(10);
-/// How long a call that may start Julia waits: the core answers within 45 s,
-/// that Julia is still starting or the notebook still opening if it must, and
-/// this leaves room past that for the answer to arrive (over ssh, too).
 const JULIA_CALL_WAIT: Duration = Duration::from_secs(55);
 
-/// What Julia is doing, from a call's error that says it's still starting
-/// ("julia_starting::Downloading Julia 1.12.6… 42%. The first start can take…").
 pub fn julia_starting(error: &str) -> Option<&str> {
     let step = error.strip_prefix("julia_starting::")?;
     Some(step.split_once(". The first start").map_or(step, |(step, _)| step).trim())
 }
 
-/// Why Julia couldn't start, from a call's error that says so.
 pub fn julia_failed(error: &str) -> Option<&str> {
     error.strip_prefix("julia_failed::").or_else(|| error.strip_prefix("julia_not_found::")).map(str::trim)
 }
 
-/// Why Julia couldn't start, for the person: the core words it for the agent,
-/// whose part ("Tell the user…", "Ask the user…") the pane's Try again stands in for.
 pub fn julia_failed_words(why: &str) -> String {
     let agent = |sentence: &str| ["Tell the user", "Ask the user"].iter().any(|start| sentence.trim_start().starts_with(start));
     let kept: Vec<&str> = why.split_inclusive(". ").filter(|sentence| !agent(sentence)).collect();
@@ -262,15 +202,11 @@ pub fn julia_failed_words(why: &str) -> String {
     if words.trim().is_empty() { why.trim().to_owned() } else { words.trim().to_owned() }
 }
 
-/// What Julia is doing in a runtime, as `endeavor/julia_status` says it (EndeavorMCP interface 5).
 #[derive(Clone, Debug, PartialEq)]
 pub enum JuliaStatus {
-    /// Nothing has needed Julia yet.
     NotStarted,
-    /// The step under way, and how many seconds since the last sign of progress.
     Starting { step: String, quiet: u64 },
     Ready,
-    /// The last start failed: its code (`julia_failed`, `julia_not_found`) and why.
     Failed { code: String, message: String },
 }
 
@@ -287,15 +223,10 @@ impl JuliaStatus {
     }
 }
 
-/// The Julia or R a runtime started, as its status says (`julia` in `endeavor/julia_status`, `r` in
-/// `endeavor/r_status`; a runtime from before EndeavorMCP #371 says neither): what Settings show,
-/// rather than the app working out for itself which one the runtime picked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Started {
     pub path: String,
-    /// Julia's version; none for R.
     pub version: Option<String>,
-    /// Endeavor's own, not the user's.
     pub endeavors: bool,
 }
 
@@ -311,72 +242,60 @@ impl Started {
     }
 }
 
-/// Where R notebooks' setup is, as `endeavor/r_status` says it (EndeavorMCP
-/// interface 9): the same states as Julia's, with no quiet seconds, and the
-/// failure's code `r_failed` or `r_not_found`.
 pub type RStatus = JuliaStatus;
 
-/// Where R notebooks' setup is (Endeavor's own R, Ember, R starting), without starting it.
 pub fn r_status(bridge: &Bridge) -> Result<(RStatus, Option<Started>), String> {
     let result = app_call(bridge, "endeavor/r_status", json!({}))?;
     Ok((JuliaStatus::from(&result)?, Started::r(&result)))
 }
 
-/// Where Julia is, without starting it.
 pub fn julia_status(bridge: &Bridge) -> Result<(JuliaStatus, Option<Started>), String> {
     let result = app_call(bridge, "endeavor/julia_status", json!({}))?;
     Ok((JuliaStatus::from(&result)?, Started::julia(&result)))
 }
 
-/// Start Julia now (after a failure: the person's Try again), and where it is then.
 pub fn start_julia(bridge: &Bridge) -> Result<JuliaStatus, String> {
     JuliaStatus::from(&app_call(bridge, "endeavor/start_julia", json!({}))?)
 }
 
-/// What R notebooks' setup is doing, from a call's error that says it's still
-/// installing ("r_installing::Installing Ember for R notebooks, which takes…").
 pub fn r_installing(error: &str) -> Option<&str> {
     let step = error.strip_prefix("r_installing::")?;
     Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
 }
 
-/// The step the pane shows while a notebook is still opening.
+pub fn python_installing(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("python_installing::")?;
+    Some(step.split([',', '(']).next().unwrap_or(step).trim())
+}
+
+pub fn python_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("python_failed::").or_else(|| error.strip_prefix("python_not_found::")).map(str::trim)
+}
+
+pub fn allow_uv_install(bridge: &Bridge) -> Result<(), String> {
+    app_call(bridge, "endeavor/allow_uv_install", json!({})).map(|_| ())
+}
+
 pub const OPENING: &str = "Opening the notebook";
 
-/// How long the app keeps calling again while a notebook is still opening.
-/// The runtime's open has no limit of its own, so a Julia that hangs while
-/// opening would otherwise leave the pane waiting for ever.
 const OPENING_LIMIT: Duration = Duration::from_secs(600);
 
-/// Why the app stopped waiting for a notebook that was still opening, for the person.
 pub const OPEN_STUCK: &str = "The notebook was still opening after 10 minutes, so Endeavor stopped waiting. Try again to wait for it again.";
 
-/// Why the app stopped waiting for Run notebook's new Julia process, for the person.
 pub const RUN_STUCK: &str = "The notebook was still starting after 10 minutes, so Endeavor stopped waiting. Try again to wait for it again.";
 
-/// Whether a call's answer says an open or a new notebook took longer than one
-/// call waits ("notebook_opening::Opening '/x.jl' is taking longer…"): the open
-/// goes on, and the same call again gets it. The step is always `OPENING`.
 pub fn notebook_opening(error: &str) -> Option<&'static str> {
     error.starts_with("notebook_opening::").then_some(OPENING)
 }
 
-/// That the app stopped waiting for a notebook still opening (`until_julia`):
-/// its words for the person.
 pub fn open_stuck(error: &str) -> Option<&str> {
     error.strip_prefix("open_stuck::")
 }
 
-/// Why R notebooks couldn't start, from a call's error that says so.
 pub fn r_failed(error: &str) -> Option<&str> {
     error.strip_prefix("r_failed::").or_else(|| error.strip_prefix("r_not_found::")).map(str::trim)
 }
 
-/// `call` again while it answers that Julia is still starting (the first
-/// start downloads Julia and installs Pluto's packages, which takes minutes),
-/// or that R notebooks are still being set up (R, then Ember), or that the
-/// notebook is still opening, with `step` hearing what it's doing each time.
-/// A notebook still opening after `OPENING_LIMIT` ends it with `open_stuck`.
 pub fn until_julia<T>(call: impl FnMut() -> Result<T, String>, step: &dyn Fn(&str)) -> Result<T, String> {
     until_julia_within(call, step, OPENING_LIMIT)
 }
@@ -385,7 +304,7 @@ fn until_julia_within<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn
     let mut opening_since = None;
     loop {
         match call() {
-            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| notebook_opening(&e)) {
+            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| python_installing(&e)).or_else(|| notebook_opening(&e)) {
                 Some(doing) => {
                     if notebook_opening(&e).is_some() {
                         if opening_since.get_or_insert_with(std::time::Instant::now).elapsed() >= limit {
@@ -404,13 +323,10 @@ fn until_julia_within<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn
     }
 }
 
-/// Let the runtime install Endeavor's own R, which the person agreed to (EndeavorMCP interface 6).
 pub fn allow_r_install(bridge: &Bridge) -> Result<(), String> {
     app_call(bridge, "endeavor/allow_r_install", json!({})).map(|_| ())
 }
 
-/// A new notebook in session `owner`'s folder, bound to it: (notebook id, path).
-/// Julia starts first if it isn't running (see `open_notebook`).
 pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), String> {
     let result = app_call_waiting(bridge, "endeavor/new_notebook", json!({ "owner": owner.to_string() }), JULIA_CALL_WAIT)?;
     match (result["notebook_id"].as_str(), result["path"].as_str()) {
@@ -419,16 +335,10 @@ pub fn new_notebook(bridge: &Bridge, owner: u64) -> Result<(String, String), Str
     }
 }
 
-/// Leave safe preview and run the notebook (the user's Run notebook). Its new
-/// Julia process can take longer than one call, installing packages: then this
-/// answers `notebook_opening`, and the same call again gets the result.
 pub fn allow_execution(bridge: &Bridge, notebook_id: &str) -> Result<(), String> {
     answer(call_tool_waiting(bridge, "allow_execution", json!({ "notebook_id": notebook_id }), JULIA_CALL_WAIT)?).map(|_| ())
 }
 
-/// GET `target` (a path and query) on Pluto's server, such as an export,
-/// through the host's loopback relay.
-/// The pages' token opens it; the MCP token gets a 401 there.
 pub fn fetch(bridge: &Bridge, target: &str) -> Result<Vec<u8>, String> {
     let host = bridge.host()?;
     let mut stream = TcpStream::connect(host).map_err(|e| e.to_string())?;
@@ -439,7 +349,6 @@ pub fn fetch(bridge: &Bridge, target: &str) -> Result<Vec<u8>, String> {
     http_body(&response)
 }
 
-/// A whole HTTP/1.x response's body (plain or chunked), if its status is 200.
 fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
     let split = response.windows(4).position(|w| w == b"\r\n\r\n").ok_or("malformed HTTP response")?;
     let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
@@ -464,23 +373,16 @@ fn http_body(response: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-/// What a notebook's packages wait for the user's OK on (`approve_install`): packages new to a
-/// Julia or Python notebook (`new`, EndeavorMCP #397 and #355), or an R notebook's large download.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Asking {
     pub new: bool,
     pub packages: Vec<String>,
-    /// A new package whose name is close to a widely used one's, and that one (`pandsa`, `pandas`):
-    /// a likely typo, which the card says (EndeavorMCP #417).
     pub close_to: Vec<(String, String)>,
-    /// What the download comes to, in bytes, if the runtime knows (R's large packages, #171).
     pub bytes: Option<u64>,
 }
 
-/// The notebook `id`'s `Asking` in a `list_notebooks` result, if its packages wait for an OK.
 pub fn install_asking(listed: &Value, id: &str) -> Option<Asking> {
     let notebooks = listed.as_array().or_else(|| listed["notebooks"].as_array())?;
-    // The whole id, as the call names it: a UUID, which only its case may write otherwise.
     let nb = notebooks.iter().find(|nb| nb["notebook_id"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(id)))?;
     let packages = &nb["packages"];
     if packages["step"] != "asking" {
@@ -492,29 +394,20 @@ pub fn install_asking(listed: &Value, id: &str) -> Option<Asking> {
     Some(Asking { new: packages["new"] == true, packages: names, close_to, bytes: packages["download"]["bytes"].as_f64().filter(|b| *b > 0.0).map(|b| b as u64) })
 }
 
-/// What a run would run, for the approval card (the runtime's `run_preview`).
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct RunPreview {
-    /// The whole notebook (`count` is then its size).
     pub all: bool,
     pub count: usize,
     pub cells: Vec<PreviewCell>,
-    /// Cells these depend on that never ran, which run first.
     #[serde(default)]
     pub needed_ids: Vec<String>,
-    /// Other cells that re-run with these.
     pub dependents: usize,
-    /// Those cells' ids (a runtime older than this field sends none).
     #[serde(default)]
     pub dependent_ids: Vec<String>,
-    /// The packages a whole-notebook run loads, in notebook order.
     #[serde(default)]
     pub packages: Vec<String>,
-    /// For `approve_install`: what the notebook's packages wait for the user's OK on, from
-    /// `list_notebooks` (`install_asking`), not from the runtime's `run_preview`.
     #[serde(skip)]
     pub asking: Option<Asking>,
-    /// For `answer_prompt`: what the cell asks, from `read_cell`'s `waiting_for_input` (#171).
     #[serde(skip)]
     pub question: Option<String>,
 }
@@ -523,12 +416,10 @@ pub struct RunPreview {
 pub struct PreviewCell {
     #[serde(default)]
     pub id: Option<String>,
-    /// What the cell defines, e.g. "fit, model".
     pub name: Option<String>,
     pub code: String,
 }
 
-/// The question a cell waits on, from its `read_cell`: what `readline()` printed, trimmed.
 pub fn prompt_question(read: &Value) -> Option<String> {
     let text = read["waiting_for_input"]["prompt"].as_str()?.trim();
     (!text.is_empty()).then(|| text.to_owned())
@@ -550,7 +441,6 @@ pub fn run_preview(bridge: &Bridge, tool: &str, arguments: &Value) -> Result<Run
     serde_json::from_value(reply["result"].clone()).map_err(|e| e.to_string())
 }
 
-/// One JSON-RPC request to the runtime's app-only `/endeavor/call` endpoint.
 fn rpc(bridge: &Bridge, method: &str, params: Value) -> Result<Value, String> {
     rpc_waiting(bridge, method, params, CALL_WAIT)
 }
@@ -561,8 +451,6 @@ fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> 
 
     let mut stream = TcpStream::connect(host).map_err(connection_error)?;
     stream.set_read_timeout(Some(wait)).map_err(connection_error)?;
-    // HTTP/1.0: the bridge sends no Content-Length, so read the body to EOF
-    // instead of dealing with chunked encoding.
     write!(
         stream,
         "POST /endeavor/call HTTP/1.0\r\nHost: {host}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
@@ -577,13 +465,9 @@ fn rpc_waiting(bridge: &Bridge, method: &str, params: Value, wait: Duration) -> 
     serde_json::from_str(payload).map_err(|e| format!("bad JSON-RPC reply: {e}"))
 }
 
-/// A call's connection failing, in plain words on its first line (the notice's reason) and the
-/// system's own words after it, for Details (#111): on Windows those read "A connection attempt
-/// failed because the connected party did not properly respond… (os error 10060)".
 fn connection_error(e: std::io::Error) -> String {
     use std::io::ErrorKind::*;
     let plain = match e.kind() {
-        // A read timeout is WouldBlock on Unix and TimedOut on Windows.
         TimedOut | WouldBlock => "The notebook didn't answer.",
         ConnectionRefused | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected | UnexpectedEof => "The notebook isn't running.",
         _ => return e.to_string(),
@@ -591,13 +475,11 @@ fn connection_error(e: std::io::Error) -> String {
     format!("{plain}\n{e}")
 }
 
-/// A notebook left with cells edited but not run, or still running.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunWarning {
     pub path: String,
     pub kind: RunWarningKind,
     pub cells: Vec<String>,
-    /// Edited cells can't run until the user lets the notebook run.
     pub safe_preview: bool,
 }
 
@@ -626,8 +508,6 @@ impl std::fmt::Display for RunWarning {
     }
 }
 
-/// Notebooks left with edited-but-unrun or still-running cells, from
-/// `list_notebooks` (which reports run state without counting as a read).
 pub fn run_warnings(notebooks: &Value) -> Vec<RunWarning> {
     let mut warnings = Vec::new();
     for nb in notebooks.as_array().into_iter().flatten() {
@@ -635,7 +515,6 @@ pub fn run_warnings(notebooks: &Value) -> Vec<RunWarning> {
             nb[key].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
         };
         let running = ids("running");
-        // Cells queued for a run are also pending until they finish; count them once.
         let unrun: Vec<String> = ids("pending_run").into_iter().filter(|id| !running.contains(id)).collect();
         let path = nb["path"].as_str().unwrap_or_default().to_owned();
         let safe_preview = nb["execution_allowed"] == false;
@@ -648,9 +527,6 @@ pub fn run_warnings(notebooks: &Value) -> Vec<RunWarning> {
     warnings
 }
 
-/// What is still true of `said` in `notebooks`: each warning keeps only the
-/// cells that are still unrun or still running, and goes once none are. It
-/// never gains cells, so an old note doesn't take on a later turn's work.
 pub fn still_true(said: &[RunWarning], notebooks: &Value) -> Vec<RunWarning> {
     let now = run_warnings(notebooks);
     said.iter()
@@ -662,12 +538,8 @@ pub fn still_true(said: &[RunWarning], notebooks: &Value) -> Vec<RunWarning> {
         .collect()
 }
 
-/// A cell the user changed between two events: (notebook id, cell id, name).
 pub type UserEdit = (String, String, Option<String>);
 
-/// Cells whose code the user changed between two `/events` snapshots
-/// (`{notebook_id: [cell state]}`): authored by "user", with a new version. The
-/// first snapshot (`old` null) reports nothing.
 pub fn user_edits(old: &Value, new: &Value) -> Vec<UserEdit> {
     let mut edits = Vec::new();
     let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else { return edits };
@@ -683,8 +555,6 @@ pub fn user_edits(old: &Value, new: &Value) -> Vec<UserEdit> {
     edits
 }
 
-/// The cells that were unrun (the agent changed them) in `old` and have run
-/// since in `new`, by notebook, from two `/events` updates' `cells`.
 pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
     let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else { return Vec::new() };
     let mut out = Vec::new();
@@ -708,6 +578,19 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_python_page_loads_once_its_notebook_may_run() {
+        let preview = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": false }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        let running = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": true }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        assert!(super::waits_to_run(&preview, "/w/fit.py"));
+        assert!(!super::waits_to_run(&running, "/w/fit.py"));
+        assert!(!super::waits_to_run(&preview, "/w/other.py"), "a notebook the runtime doesn't list isn't waiting");
+        assert_eq!(super::newly_allowed(&preview, &running), ["/w/fit.py"]);
+        assert!(super::newly_allowed(&running, &running).is_empty(), "already running: no reload");
+        assert!(super::newly_allowed(&serde_json::Value::Null, &running).is_empty(), "opened straight into running");
+    }
+
     use super::*;
 
     #[test]
@@ -720,7 +603,6 @@ mod tests {
         let refused = connection_error(Error::new(ErrorKind::ConnectionRefused, "No connection could be made because the target machine actively refused it. (os error 10061)"));
         assert_eq!(crate::notice::reason(&refused), "The notebook isn't running.");
         assert_eq!(connection_error(Error::new(ErrorKind::InvalidData, "stream did not contain valid UTF-8")), "stream did not contain valid UTF-8", "anything else as it came");
-        // A read that times out on Unix.
         assert_eq!(crate::notice::reason(&connection_error(Error::from(ErrorKind::WouldBlock))), "The notebook didn't answer.");
     }
 
@@ -745,7 +627,6 @@ mod tests {
 
     #[test]
     fn the_status_says_which_julia_and_r_the_runtime_started() {
-        // As the core sends them (EndeavorMCP core.rs `status`).
         let julia = serde_json::json!({ "state": "ready", "julia": { "path": "/opt/julia/bin/julia", "version": "1.13.4", "endeavors": false } });
         assert_eq!(Started::julia(&julia), Some(Started { path: "/opt/julia/bin/julia".into(), version: Some("1.13.4".into()), endeavors: false }));
         let r = serde_json::json!({ "state": "ready", "r": { "rscript": "/usr/bin/Rscript", "endeavors": true } });
@@ -756,7 +637,6 @@ mod tests {
 
     #[test]
     fn the_events_list_the_notebooks_r_took_with_it() {
-        // As the core sends it (EndeavorMCP notebooks.rs `compose`).
         let event = serde_json::json!({ "engine_ended": [{ "path": "/lab/growth.R", "language": "R", "why": "exit status: 1; R's last output: Error: boom" }] });
         assert_eq!(engine_ended(&event), [("/lab/growth.R".to_owned(), "R".to_owned(), "exit status: 1; R's last output: Error: boom".to_owned(), 0)]);
         assert!(engine_ended(&serde_json::json!({})).is_empty(), "an older runtime sends none");
@@ -770,7 +650,6 @@ mod tests {
 
     #[test]
     fn a_call_that_waits_for_julia_says_what_julia_is_doing() {
-        // As the core words it (EndeavorMCP core.rs `JuliaStarter::wait`).
         let starting = "julia_starting::Downloading Julia 1.12.6… 42%. The first start can take several minutes (Julia, then Pluto's packages). Try again in a minute.";
         assert_eq!(julia_starting(starting), Some("Downloading Julia 1.12.6… 42%"));
         assert_eq!(julia_starting("julia_starting::Julia is starting"), Some("Julia is starting"));
@@ -788,7 +667,6 @@ mod tests {
         assert_eq!(read(serde_json::json!({ "state": "ready" })), Ok(JuliaStatus::Ready));
         assert_eq!(read(serde_json::json!({ "state": "failed", "code": "julia_failed", "message": "no" })), Ok(JuliaStatus::Failed { code: "julia_failed".into(), message: "no".into() }));
         assert!(read(serde_json::json!({})).is_err());
-        // As the core words a start that stalled (EndeavorMCP core.rs `JuliaStarter::start`).
         let stalled = "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped. Tell the user; trying again starts Julia afresh, so ask them before trying again.";
         assert_eq!(julia_failed_words(stalled), "Julia made no progress for 30 minutes while starting (no new step, nothing new in the runtime's log), so it was stopped. The runtime's log (/x/runtime.log) shows where it stopped.");
         assert_eq!(julia_failed_words("Couldn't start /x/julia: gone"), "Couldn't start /x/julia: gone");
@@ -802,19 +680,37 @@ mod tests {
         let result = until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned()));
         assert_eq!(result, Ok(7));
         assert_eq!(*heard.borrow(), ["Julia is starting", "Julia 1.12.6 is starting and loading Pluto"]);
-        // As the core words an open that outlasted its call (EndeavorMCP notebooks.rs `open_waited`): it goes on, and the same call again gets it.
         let answers = std::cell::RefCell::new(vec![Ok(8), Err("notebook_opening::Creating '/p/a.jl' is taking longer than one call waits: the first notebook…".to_owned())]);
         let heard = std::cell::RefCell::new(Vec::new());
         assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(8));
         assert_eq!(*heard.borrow(), [super::OPENING]);
-        // A notebook that stays opening past the limit ends the wait, with words for the person.
         let stuck: Result<(), String> = super::until_julia_within(|| Err("notebook_opening::Opening '/p/a.jl' is taking longer…".into()), &|_| {}, std::time::Duration::ZERO);
         assert_eq!(stuck.as_ref().err().and_then(|e| super::open_stuck(e)), Some(super::OPEN_STUCK));
-        // Run notebook's still-starting answer, a normal tool result (EndeavorMCP #128), is waited out the same way.
         let answers = std::cell::RefCell::new(vec![json!({ "ran": true }), json!({ "error": "notebook_opening", "message": "Starting the notebook is taking longer than one call waits…" })]);
         assert_eq!(until_julia(|| super::answer(answers.borrow_mut().pop().unwrap()), &|_| {}), Ok(json!({ "ran": true })));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
+    }
+
+    #[test]
+    fn only_this_computers_sessions_say_they_show_python() {
+        let here = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::ThisMac);
+        assert_eq!(here["shows_python"], crate::new_session::SHOWS_PYTHON);
+        assert_eq!((here["owner"].as_str(), here["kind"].as_str()), (Some("7"), Some("python")));
+        let server = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::Server("lab".into()));
+        assert_eq!(server["shows_python"], false);
+    }
+
+    #[test]
+    fn until_julia_waits_while_python_notebooks_set_up_and_names_the_step() {
+        let answers = std::cell::RefCell::new(vec![
+            Ok(9),
+            Err("python_installing::Downloading uv 0.11.32 for Python notebooks (4 seconds so far). Make the same call again right away: each call waits up to 30 seconds.".to_owned()),
+            Err("python_installing::Setting up Python notebooks: uv is getting Python and marimo, which can take a few minutes the first time (2 seconds so far).".to_owned()),
+        ]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(9));
+        assert_eq!(*heard.borrow(), ["Setting up Python notebooks: uv is getting Python and marimo", "Downloading uv 0.11.32 for Python notebooks"]);
     }
 
     #[test]
@@ -903,8 +799,6 @@ mod tests {
     }
 }
 
-/// Live check against a running bridge: `ENDEAVOR_TEST_MCP_URL=http://127.0.0.1:PORT/mcp
-/// ENDEAVOR_TEST_TOKEN=… cargo test -- --ignored live_bridge`.
 #[cfg(test)]
 #[test]
 #[ignore]

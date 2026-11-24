@@ -1,13 +1,3 @@
-//! Settings: a panel over the dimmed window, with Search and the sections on
-//! the left and one section's page on the right. Assistants and languages
-//! have their own pages (Claude, Julia), reached from a Settings button.
-//!
-//! Every page is built as data first (`View`: groups of rows, each with its
-//! words and controls), then drawn by one renderer, so every row follows the
-//! same rule for text: title, status and description share one left edge,
-//! and a radio or icon sits in its own column to the left of it. Search reads
-//! the same pages, and so does the debug state dump.
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -29,7 +19,6 @@ use crate::signin::{self, Account, Look, Method, Stage};
 use crate::layer::{self, Hole, Layer};
 use crate::{Workspace, theme};
 
-/// A section in the list on the left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Assistants,
@@ -76,7 +65,6 @@ impl Section {
         }
     }
 
-    /// In "Your work"; the rest are under "Endeavor".
     fn yours(self) -> bool {
         matches!(self, Section::Assistants | Section::Notebooks | Section::Hosts)
     }
@@ -93,15 +81,11 @@ impl Section {
     }
 }
 
-/// A page: a section's own, or one of its sub-pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Section(Section),
-    /// Assistants › Claude.
     Claude,
-    /// Notebooks › Julia.
     Julia,
-    /// Notebooks › R.
     R,
 }
 
@@ -135,7 +119,6 @@ impl Page {
         }
     }
 
-    /// A sub-page's name, as its title and in search results' paths.
     fn sub_name(self) -> Option<&'static str> {
         match self {
             Page::Section(_) => None,
@@ -146,46 +129,26 @@ impl Page {
     }
 }
 
-/// The open panel.
 pub struct Panel {
     pub page: Page,
     pub search: Entity<InputState>,
-    /// The row a search result opened, lit until the page changes.
     pub highlight: Option<SharedString>,
-    /// The "Stop idle notebooks after" list is open.
     pub idle_menu: bool,
     focus: FocusHandle,
-    /// What had focus before the panel opened, to give it back.
     restore: Option<FocusHandle>,
-    /// Each control's Tab-stop handle, by its element id: pages are rebuilt each render.
     controls: RefCell<HashMap<SharedString, FocusHandle>>,
 }
 
-/// What Settings shows that has to be found out: kept on the workspace, so the
-/// Notebooks row and the list's dots can use it too.
 #[derive(Default)]
 pub struct Checks {
-    /// The account `claude auth status` reports, as last read.
     pub profile: Option<signin::Profile>,
-    /// The Julia chosen in Settings, and what running it found.
     pub julia: Option<(PathBuf, ChosenJulia)>,
-    /// The Julia This Mac's helper was started with, as Settings chose it then:
-    /// a different choice since needs a restart.
     pub local_julia: Option<endeavor_mcp::julia::Preference>,
-    /// The user's own Julia (`julia::users_julia`), as last looked for: its path
-    /// and version, or why it can't be used; none until looked.
     pub users_julia: Option<Option<Result<(String, String), String>>>,
-    /// Likewise its R setting (`Settings::r`).
     pub local_r: Option<Option<String>>,
-    /// Repair Julia is under way.
     pub repairing: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Pages as data
-// ---------------------------------------------------------------------------
-
-/// A page's content, before drawing.
 pub(crate) struct View {
     pub back: Option<Page>,
     pub title: SharedString,
@@ -202,44 +165,29 @@ pub(crate) struct Group {
 
 pub(crate) enum Item {
     Row(Row),
-    /// Label and value lines (the account).
     Table(Vec<(&'static str, String)>),
-    /// Choices drawn as pictures (Appearance).
     Pictures(Vec<Picture>),
-    /// The logo, version and credits (About).
     Brand,
-    /// A line of links (About).
     Links(Vec<Control>),
-    /// "Add server…": a row that is its own button, at a card's foot.
     Add { key: SharedString, label: &'static str, act: Act },
 }
 
 #[derive(Default)]
 pub(crate) struct Row {
-    /// Names the row for ids, search results and the highlight.
     pub key: SharedString,
     pub lead: Lead,
     pub title: SharedString,
-    /// Faint words after the title ("by Anthropic", "Slurm").
     pub aside: Option<SharedString>,
-    /// The title itself is a state ("Not signed in").
     pub title_tone: Option<Tone>,
-    /// An alert symbol after the title.
     pub problem: bool,
-    /// A search result's path ("Notebooks › Languages").
     pub crumb: Option<SharedString>,
     pub status: Option<Status2>,
     pub desc: Option<SharedString>,
     pub extra: Option<Extra>,
     pub controls: Vec<Control>,
-    /// Greyed: listed, but not available yet.
     pub unavailable: bool,
-    /// The whole row acts (a search result).
     pub act: Option<Act>,
-    /// What search finds this row by, besides its title and description; None
-    /// leaves it out of search.
     pub search: Option<SharedString>,
-    /// What a search result says under the title, when not the description's first sentence.
     pub summary: Option<SharedString>,
 }
 
@@ -247,12 +195,10 @@ pub(crate) struct Row {
 pub(crate) enum Lead {
     #[default]
     None,
-    /// `act` None: can't be picked.
     Radio { checked: bool, act: Option<Act> },
     Icon { glyph: Glyph, dot: bool, faint: bool, tone: Option<Tone> },
 }
 
-/// A row's state line: words, and a leading path in code type.
 pub(crate) struct Status2 {
     pub mono: Option<String>,
     pub text: String,
@@ -267,14 +213,10 @@ impl Status2 {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tone {
-    /// A plain fact ("Signed in as …").
     Plain,
-    /// Something running.
     Running,
     Quiet,
-    /// Needs you (orange): signed out, an update.
     Attention,
-    /// Broken (red).
     Danger,
 }
 
@@ -300,13 +242,9 @@ impl Tone {
     }
 }
 
-/// More under a row's words, on the same left edge.
 pub(crate) enum Extra {
-    /// A second line of advice.
     Hint(String),
-    /// The chosen Julia: its path in a box, and its version.
     Path { path: String, version: String },
-    /// Work under way: what it's doing, how far, and a thin bar.
     Progress { text: String, step: String, fraction: f32 },
 }
 
@@ -316,11 +254,8 @@ pub(crate) enum Control {
     Select { value: &'static str, act: Act, aria: SharedString },
     Gear { act: Act, aria: SharedString },
     Link { label: &'static str, external: bool, act: Act },
-    /// Small faint words ("Not available yet").
     Meta(SharedString),
-    /// A fact at the right, as large as a description ("1.12.6 · recommended").
     Note(SharedString),
-    /// A result's "opens" chevron; the row itself acts.
     Chevron,
 }
 
@@ -342,17 +277,12 @@ pub enum Thumb {
     Classic,
 }
 
-/// What a control does.
 #[derive(Clone, PartialEq)]
 pub enum Act {
     Go(Page),
-    /// A search result: its page, with its row lit.
     Found(Page, SharedString),
-    /// The Assistants row's Sign in: the way it was done last, else Claude's page.
     SignInAgain,
-    /// New sessions use this agent.
     UseAgent(crate::agent::Agent),
-    /// Codex's browser sign-in, or checking it again.
     SignInCodex,
     CheckCodex,
     SignInAntigravity,
@@ -365,19 +295,15 @@ pub enum Act {
     RunWithoutAsking,
     IdleMenu,
     Idle(IdleStop),
-    /// The user's own Julia, else Endeavor's (Settings' default).
     YourJulia,
     OwnJulia,
     ChooseJulia,
-    /// Install or remove Endeavor's own Julia (`own_julia`).
     InstallJulia,
     RemoveJulia,
-    RestartJulia,
+    RestartNotebooks,
     RepairJulia,
-    /// R: found by itself (`Settings::r` none), or one the user chose.
     AutoR,
     ChooseR,
-    /// Install or remove Endeavor's own R (`own_r`).
     InstallR,
     RemoveR,
     Stop(HostId),
@@ -396,26 +322,16 @@ pub enum Act {
     Licences,
 }
 
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-/// A setting search can find.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Found {
     pub page: Page,
     pub key: SharedString,
-    /// Where it lives: "Notebooks › Languages".
     pub crumb: String,
     pub title: String,
-    /// Its description's first sentence.
     pub summary: Option<String>,
-    /// What else it's found by.
     pub words: String,
 }
 
-/// The settings matching `query`: each of its words is in the result's path,
-/// title, description or other words, ignoring case.
 pub fn matches<'a>(entries: &'a [Found], query: &str) -> Vec<&'a Found> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if words.is_empty() {
@@ -430,10 +346,8 @@ pub fn matches<'a>(entries: &'a [Found], query: &str) -> Vec<&'a Found> {
         .collect()
 }
 
-/// Where each of `query`'s words is in `text`, ignoring case, for marking it.
 pub fn marks(text: &str, query: &str) -> Vec<Range<usize>> {
     let lower = text.to_lowercase();
-    // Lower-casing can change a character's length; then nothing is marked rather than the wrong letters.
     if lower.len() != text.len() {
         return Vec::new();
     }
@@ -457,7 +371,6 @@ pub fn marks(text: &str, query: &str) -> Vec<Range<usize>> {
     merged
 }
 
-/// A description's first sentence, for a result.
 fn first_sentence(text: &str) -> String {
     match text.find(". ") {
         Some(at) => text[..=at].to_owned(),
@@ -465,12 +378,10 @@ fn first_sentence(text: &str) -> String {
     }
 }
 
-/// The warning for a notebook with a cell edited and not run.
 fn unrun_edit(file: &str) -> String {
     format!("A cell in {file} has an edit that hasn't been run. It isn't in the file, so it will be lost.")
 }
 
-/// "residuals.jl closes. Its file is saved." for Stop's question.
 pub fn closes(files: &[String]) -> String {
     match files {
         [] => "No notebooks are open there.".into(),
@@ -478,10 +389,6 @@ pub fn closes(files: &[String]) -> String {
         [rest @ .., last] => format!("{} and {last} close. Their files are saved.", rest.join(", ")),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Building the pages
-// ---------------------------------------------------------------------------
 
 fn row(key: impl Into<SharedString>, title: impl Into<SharedString>) -> Row {
     let title = title.into();
@@ -504,7 +411,6 @@ impl Group {
 }
 
 impl Workspace {
-    /// The page's content as data.
     pub(crate) fn settings_view(&self, page: Page) -> View {
         let section = |s: Section, groups| View { back: None, title: s.name().into(), aside: None, subtitle: Some(s.subtitle().into()), groups };
         match page {
@@ -671,10 +577,7 @@ impl Workspace {
         vec![account, setup]
     }
 
-    /// What the Notebooks page's Julia row says: which Julia runs (yours, Endeavor's or the chosen
-    /// one) and its version, or what's wrong with the chosen one.
     fn julia_line(&self) -> Status2 {
-        // What this computer's runtime says it started, while the choice that started it stands.
         if let Some(started) = self.julia_started_here().filter(|_| !self.julia_changed()) {
             let version = started.version.clone().unwrap_or_default();
             return if started.endeavors {
@@ -699,17 +602,14 @@ impl Workspace {
         }
     }
 
-    /// The Notebooks page's Julia line, for the state dump.
     pub(crate) fn julia_line_text(&self) -> String {
         self.julia_line().text
     }
 
-    /// The Julia this computer's runtime says it started (`endeavor/julia_status`), while it runs one.
     pub fn julia_started_here(&self) -> Option<&crate::pluto::Started> {
         self.connections.get(&HostId::ThisMac).filter(|c| c.status == Status::Ready).and_then(|c| c.julia_started.as_ref())
     }
 
-    /// The user's own Julia, when Settings ask for it (no chosen one, not Endeavor's) and it can be used.
     fn yours_runs(&self) -> Option<&(String, String)> {
         if self.settings.endeavors_julia {
             return None;
@@ -720,7 +620,6 @@ impl Workspace {
         }
     }
 
-    /// The chosen Julia can't be used, so Endeavor's runs instead.
     pub fn julia_broken(&self) -> bool {
         matches!((&self.settings.julia, &self.settings_checks.julia), (Some(path), Some((checked, check))) if checked == path && !matches!(check, ChosenJulia::Usable(_)))
     }
@@ -755,13 +654,11 @@ impl Workspace {
         vec![
             group(Some("When notebooks stop"), vec![Item::Row(idle)]),
             group(Some("Running code"), vec![Item::Row(ask)]),
-            group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), later("python", "Python", ".py notebooks")])
+            group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), self.python_row().map_or_else(|| later("python", "Python", ".py notebooks"), Item::Row)])
                 .foot("Each language has its own program. Servers and clusters set theirs in Where notebooks run."),
         ]
     }
 
-    /// What the Notebooks page's R row says: which R runs R notebooks.
-    /// While R runs, the R the runtime says it started; before, what `--r auto` would pick.
     fn r_line(&self) -> String {
         let started = self.connections.get(&HostId::ThisMac).filter(|c| c.status == Status::Ready && !self.r_changed()).and_then(|c| c.r_started.as_ref());
         match (&self.settings.r, started, &self.own_r.found) {
@@ -774,7 +671,6 @@ impl Workspace {
         }
     }
 
-    /// Notebooks › R's row; none where R notebooks don't run (Windows).
     fn r_row(&self) -> Option<Row> {
         if cfg!(windows) {
             return None;
@@ -789,7 +685,20 @@ impl Workspace {
         Some(r)
     }
 
-    /// The R setting differs from the one This Mac's runtime was started with.
+    fn python_row(&self) -> Option<Row> {
+        if !crate::new_session::SHOWS_PYTHON {
+            return None;
+        }
+        let mut python = row("python", "Python");
+        python.aside = Some(".py notebooks".into());
+        python.lead = Lead::Icon { glyph: Glyph::File, dot: false, faint: false, tone: None };
+        let line = "Runs on marimo, with uv getting Python and each notebook's packages";
+        python.status = Some(Status2::new(line, Tone::Plain));
+        python.search = Some("Python .py marimo uv notebooks".into());
+        python.summary = Some(format!("{line}. With no uv on this computer, the first Python notebook offers to download Endeavor's own.").into());
+        Some(python)
+    }
+
     fn r_needs_restart(&self) -> bool {
         self.status(&HostId::ThisMac) == Some(&Status::Ready) && self.r_changed()
     }
@@ -828,7 +737,7 @@ impl Workspace {
             r.search = None;
             r.lead = Lead::Icon { glyph: Glyph::Info, dot: false, faint: false, tone: Some(Tone::Attention) };
             r.desc = Some("Notebooks stop and start again, R notebooks with the R you chose. Their files are already saved.".into());
-            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartJulia), aria: "Restart notebooks".into() });
+            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
             items.push(Item::Row(r));
         }
         let which = group(Some("Which R to use"), items);
@@ -842,7 +751,6 @@ impl Workspace {
         groups
     }
 
-    /// Endeavor's R's row: installed or not, with Install or Remove, or how either is going.
     fn own_r_controls(&self, ours: &mut Row) {
         use crate::own_julia::Job;
         match (&self.own_r.job, &self.own_r.found) {
@@ -855,7 +763,6 @@ impl Workspace {
                 ours.controls.push(Control::Button { label: "Remove…", look: Look::Secondary, icon: None, act: None, aria: "Remove Endeavor's R".into() });
             }
             (job, Some(found)) => {
-                // The pane's Install R is under way in the runtime: a second install would share its folder.
                 let starting = found.is_none() && self.connections.get(&HostId::ThisMac).is_some_and(|c| c.r.is_some());
                 ours.status = Some(match job {
                     Some(Job::Failed(why)) => Status2::new(why.clone(), Tone::Danger),
@@ -872,7 +779,6 @@ impl Workspace {
         }
     }
 
-    /// This Mac's open notebooks' file names.
     pub fn open_notebook_files(&self, host: &HostId) -> Vec<String> {
         let Some(c) = self.connections.get(host).filter(|c| c.status == Status::Ready) else { return Vec::new() };
         c.notebooks
@@ -884,8 +790,6 @@ impl Workspace {
             .collect()
     }
 
-    /// When the notebook on screen runs on `host` and a cell has an edit not yet
-    /// run, the line saying stopping loses it: Pluto saves only code that has run.
     pub fn unrun_edit_warning(&self, host: &HostId) -> Option<String> {
         if !self.page.unsaved || self.session_showing(&self.page.notebook).is_none() {
             return None;
@@ -896,17 +800,10 @@ impl Workspace {
         Some(unrun_edit(&file))
     }
 
-    /// The chosen Julia differs from the one This Mac's Julia was started with.
     fn julia_needs_restart(&self) -> bool {
         self.status(&HostId::ThisMac) == Some(&Status::Ready) && self.julia_changed()
     }
 
-    /// The Julia This Mac's helper runs isn't the one chosen now. A chosen
-    /// file known to be broken counts as Auto, which runs in its place.
-    ///
-    /// When the runtime says which Julia it started, that is compared with what the choice now picks;
-    /// it may not be the app's choice at all (a runtime the plugin started with its own `--julia`).
-    /// The app's own look for the user's Julia only decides between theirs and Endeavor's.
     pub fn julia_changed(&self) -> bool {
         use endeavor_mcp::julia::Preference;
         let now = self.effective(&self.settings.julia_preference());
@@ -920,7 +817,6 @@ impl Workspace {
         self.settings_checks.local_julia.as_ref().is_some_and(|started| self.effective(started) != now)
     }
 
-    /// What a preference runs as far as Settings know: a chosen julia known to be broken runs as Auto.
     pub fn effective(&self, preference: &endeavor_mcp::julia::Preference) -> endeavor_mcp::julia::Preference {
         use endeavor_mcp::julia::Preference;
         match preference {
@@ -957,7 +853,6 @@ impl Workspace {
             }
             .into(),
         );
-        // Search finds the choice by its other half, "Another Julia on this Mac".
         ours.search = None;
         self.own_julia_controls(&mut ours);
         let mut theirs = row("julia-another", concat!("Another Julia on ", crate::platform::this_computer!(lower)));
@@ -980,26 +875,17 @@ impl Workspace {
         let mut items = vec![Item::Row(yours), Item::Row(ours), Item::Row(theirs)];
         let restart = self.julia_needs_restart();
         if restart {
-            let n = self.open_notebook_files(&HostId::ThisMac).len();
-            let mut r = row("julia-restart", "Restart Julia to use it");
+            let mut r = row("julia-restart", "Restart notebooks to use it");
             r.search = None;
             r.lead = Lead::Icon { glyph: Glyph::Info, dot: false, faint: false, tone: Some(Tone::Attention) };
-            r.desc = Some(
-                match n {
-                    0 => "Julia stops and starts again with the one you chose.".to_owned(),
-                    1 => "Your open notebook stops and starts again with the new Julia. Its file is already saved.".to_owned(),
-                    n => format!("Your {n} open notebooks stop and start again with the new Julia. Their files are already saved."),
-                }
-                .into(),
-            );
-            r.controls.push(Control::Button { label: "Restart Julia", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartJulia), aria: "Restart Julia".into() });
+            r.desc = Some("Notebooks stop and start again, Julia notebooks with the Julia you chose. Their files are already saved.".into());
+            r.controls.push(Control::Button { label: "Restart", look: Look::Primary, icon: Some(Glyph::Restart), act: Some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
             items.push(Item::Row(r));
         }
         let g = group(Some("Which Julia to use"), items);
-        vec![if restart { g } else { g.foot("Changing it takes effect when Julia restarts.") }]
+        vec![if restart { g } else { g.foot("Changing it takes effect when notebooks restart.") }]
     }
 
-    /// Endeavor's Julia's row: installed or not, with Install or Remove, or how either is going.
     fn own_julia_controls(&self, ours: &mut Row) {
         use crate::own_julia::Job;
         match (&self.own_julia.job, &self.own_julia.found) {
@@ -1114,7 +1000,6 @@ impl Workspace {
         ]
     }
 
-    /// Repair's progress: the step it's on, its number of all, and how far along.
     fn repair_progress(&self) -> Option<(String, usize, usize)> {
         if !self.settings_checks.repairing {
             return None;
@@ -1131,19 +1016,20 @@ impl Workspace {
     fn troubleshooting_groups(&self) -> Vec<Group> {
         let repair = self.repair_progress();
         let ready = self.status(&HostId::ThisMac) == Some(&Status::Ready);
-        let mut restart = row("restart-julia", "Restart Julia");
+        let mut restart = row("restart-notebooks", "Restart notebooks");
         restart.desc = Some(
             if repair.is_some() {
                 "Not available while Julia is being repaired."
             } else if ready {
-                concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
+                concat!("Stops your notebooks on ", crate::platform::this_computer!(lower), " and starts them again. Their files are already saved.")
             } else {
-                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. Julia starts when you open a Julia notebook.")
+                concat!("Notebooks aren't running on ", crate::platform::this_computer!(lower), " now. They start when you open one.")
             }
             .into(),
         );
-        restart.summary = Some(concat!("Stops your Julia notebooks on ", crate::platform::this_computer!(lower), " and starts them again.").into());
-        restart.controls.push(Control::Button { label: "Restart", look: Look::Secondary, icon: Some(Glyph::Restart), act: (ready && repair.is_none()).then_some(Act::RestartJulia), aria: "Restart Julia".into() });
+        restart.search = Some("Restart Julia R notebooks".into());
+        restart.summary = Some(concat!("Stops your notebooks on ", crate::platform::this_computer!(lower), " and starts them again.").into());
+        restart.controls.push(Control::Button { label: "Restart", look: Look::Secondary, icon: Some(Glyph::Restart), act: (ready && repair.is_none()).then_some(Act::RestartNotebooks), aria: "Restart notebooks".into() });
         let mut fix = row("repair-julia", "Repair Julia");
         fix.summary = Some("If Julia notebooks won't start or keep failing.".into());
         match repair {
@@ -1166,7 +1052,7 @@ impl Workspace {
         report.controls.push(Control::Link { label: "Send Feedback", external: true, act: Act::Feedback });
         report.controls.push(Control::Link { label: "Report on GitHub", external: true, act: Act::Report });
         vec![
-            group(Some(concat!("Julia on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]).foot("R and Python get their own group here when they arrive."),
+            group(Some(concat!("Notebooks on ", crate::platform::this_computer!(lower))), vec![Item::Row(restart), Item::Row(fix)]),
             group(Some("Report a problem"), vec![Item::Row(logs), Item::Row(report)]),
         ]
     }
@@ -1198,7 +1084,6 @@ impl Workspace {
         ]
     }
 
-    /// Everything search can find, from the pages as they are now.
     pub fn search_index(&self) -> Vec<Found> {
         let mut found = Vec::new();
         for page in Page::ALL {
@@ -1242,7 +1127,6 @@ impl Workspace {
         found
     }
 
-    /// The results page.
     fn results_view(&self, query: &str) -> (View, Vec<(Section, usize)>) {
         let index = self.search_index();
         let hits = matches(&index, query);
@@ -1277,7 +1161,6 @@ impl Workspace {
         (View { back: None, title: title.into(), aside: None, subtitle: None, groups }, counts)
     }
 
-    /// A section in the list gets a dot: something there needs you.
     fn needs_you(&self, section: Section) -> bool {
         match section {
             Section::Assistants => self.account.signed_out() && self.setup.is_none(),
@@ -1301,7 +1184,6 @@ fn problem_text(problem: &ChosenJulia) -> String {
     }
 }
 
-/// A host's row in Where notebooks run.
 fn host_key(host: &HostId) -> SharedString {
     match host {
         HostId::ThisMac => "host-this-mac".into(),
@@ -1324,14 +1206,8 @@ fn lower_first(text: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Opening, closing, acting
-// ---------------------------------------------------------------------------
-
 impl Workspace {
-    /// Open Settings at `page` (or bring it there if open).
     pub fn open_settings_at(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
-        // The missing-files screen draws no Settings, and opening it would start hosts.
         if self.missing_files.is_some() {
             return;
         }
@@ -1356,7 +1232,6 @@ impl Workspace {
         let restore = window.focused(cx);
         window.focus(&focus, cx);
         self.settings_panel = Some(Panel { page, search, highlight: None, idle_menu: false, focus, restore, controls: RefCell::new(HashMap::new()) });
-        // Settings shows every host as it is now, the account, and whether the chosen Julia still works.
         let hosts: Vec<HostId> = std::iter::once(HostId::ThisMac).chain(self.hosts.servers.iter().map(|s| HostId::Server(s.id.clone()))).collect();
         for host in hosts {
             self.check_host(&host, cx);
@@ -1369,7 +1244,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Open Settings at a host's row in Where notebooks run, lit ("Can't reach lab-server").
     pub fn open_settings_at_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings_at(Page::Section(Section::Hosts), window, cx);
         if let Some(panel) = &mut self.settings_panel {
@@ -1377,7 +1251,6 @@ impl Workspace {
         }
     }
 
-    /// Open Settings where it was last left (⌘, and the sidebar's gear).
     pub fn open_settings_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let page = self.settings_page;
         self.open_settings_at(page, window, cx);
@@ -1385,7 +1258,6 @@ impl Workspace {
 
     pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = self.settings_panel.take() else { return };
-        // A server's dialog opened from Settings goes with it, rather than staying up alone.
         if self.server_dialog.is_some() {
             self.close_server_dialog(cx);
         }
@@ -1396,11 +1268,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc: closes the idle list, then clears the search, then closes Settings.
-    /// False when Settings isn't open.
     pub fn settings_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // A server's dialog opened from here is on top: Esc is its Cancel then, and a sign-in
-        // question's is its own.
         if !self.asks.is_empty() {
             return self.settings_panel.is_some();
         }
@@ -1423,7 +1291,6 @@ impl Workspace {
         true
     }
 
-    /// ⌘F while Settings is open.
     pub fn focus_settings_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = &self.settings_panel {
             let search = panel.search.clone();
@@ -1431,18 +1298,15 @@ impl Workspace {
         }
     }
 
-    /// Read the account again (Settings opened, signed in or out).
     pub fn refresh_profile(&mut self, cx: &mut Context<Self>) {
         let read = cx.background_executor().spawn(async { signin::profile() });
         cx.spawn(async move |this, cx| {
             let profile = read.await;
             let _ = this.update(cx, |this, cx| {
                 let Ok(profile) = profile else { return };
-                // As the window's own check: only a sign-out is taken from it.
                 if profile.is_none() && matches!(this.account, Account::SignedIn) {
                     this.signed_out(cx);
                 }
-                // Claude hasn't started to check (another assistant is in use): this answers it.
                 if matches!(this.account, Account::Unknown) {
                     this.on_signed_in(profile.as_ref().map(|p| p.method), cx);
                 }
@@ -1453,7 +1317,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Run the chosen Julia once to read its version.
     pub fn check_chosen_julia(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.settings.julia.clone() else {
             self.settings_checks.julia = None;
@@ -1473,8 +1336,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Choose another Julia: the file picker, or in debug builds the path in
-    /// the file `ENDEAVOR_TEST_PICK_JULIA` names (so tests never open the picker).
     fn choose_julia(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         if let Some(file) = std::env::var_os("ENDEAVOR_TEST_PICK_JULIA")
@@ -1492,8 +1353,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Choose another R: its Rscript, with the file picker or, in debug builds,
-    /// the path in the file `ENDEAVOR_TEST_PICK_R` names.
     fn choose_r(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         if let Some(file) = std::env::var_os("ENDEAVOR_TEST_PICK_R")
@@ -1525,8 +1384,6 @@ impl Workspace {
         self.set_julia(julia, cx);
     }
 
-    /// Look for the user's own Julia, as the runtime does (`julia::users_julia`: a login shell and
-    /// `julia --version`), to say which Julia runs.
     pub fn check_users_julia(&mut self, cx: &mut Context<Self>) {
         let look = cx.background_executor().spawn(async move { endeavor_mcp::julia::users_julia() });
         cx.spawn(async move |this, cx| {
@@ -1539,8 +1396,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Ask before stopping the notebooks on `host` (Julia and R share one runtime), or
-    /// cancelling its queued job.
     fn confirm_host_stop(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.hosts.name(&host);
         let (title, detail, yes) = match self.host_state(&host) {
@@ -1612,7 +1467,7 @@ impl Workspace {
             Act::ChooseR => self.choose_r(cx),
             Act::InstallR => self.install_own_r(cx),
             Act::RemoveR => self.confirm_remove_own_r(window, cx),
-            Act::RestartJulia => self.restart_local(cx),
+            Act::RestartNotebooks => self.restart_local(cx),
             Act::RepairJulia => self.confirm_repair(window, cx),
             Act::Stop(host) => self.confirm_host_stop(host, window, cx),
             Act::TryNow(host) => match self.host_state(&host) {
@@ -1646,7 +1501,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Show `page`, with `highlight`'s row lit (a search result's); leaves the search.
     fn settings_go(&mut self, page: Page, highlight: Option<SharedString>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = &mut self.settings_panel else { return };
         panel.page = page;
@@ -1655,7 +1509,6 @@ impl Workspace {
         if !search.read(cx).value().is_empty() {
             search.update(cx, |s, cx| s.set_value("", window, cx));
         }
-        // Claude's page shows its sign-in, which only Claude's start checks.
         if page == Page::Claude {
             self.ensure_agent(crate::agent::Agent::Claude, cx);
         }
@@ -1663,15 +1516,9 @@ impl Workspace {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Drawing
-// ---------------------------------------------------------------------------
-
 use theme::{icon_grey, lit_bg, mark_bg, nav_bg};
 use crate::theme::FocusRing as _;
 
-/// Keyboard focus: rows and the section list keep an outline inside, since
-/// they fill their column; every other control gets the ring outside it.
 fn ring(d: Stateful<Div>, inside: bool) -> Stateful<Div> {
     let d = d.tab_stop(true);
     if inside { d.focus_visible(|s| s.border_2().border_color(theme::focus_ring())) } else { d.focus_ring_on(theme::panel_bg()) }
@@ -1683,7 +1530,6 @@ impl Workspace {
         Some(panel.controls.borrow_mut().entry(id.clone()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone())
     }
 
-    /// A focusable, labelled control frame.
     fn focusable(&self, id: SharedString, role: Role, aria: SharedString, cx: &App) -> Stateful<Div> {
         let d = div().id(ElementId::Name(id.clone())).role(role).aria_label(aria);
         match self.control_focus(&id, cx) {
@@ -1857,7 +1703,6 @@ impl Workspace {
             .gap(px(18.))
             .border_r_1()
             .border_color(theme::border())
-            // GPUI clips the panel's children to a rectangle, not its rounded corners.
             .rounded_l(px(13.))
             .bg(nav_bg())
             .child(search_box)
@@ -2097,7 +1942,6 @@ impl Workspace {
             .gap(px(8.))
             .when(lit, |d| d.bg(lit_bg()).rounded(px(9.)))
             .child(div().flex().items_start().gap(px(12.)).children(lead).child(text).child(controls))
-            // Under the words, on their left edge: past the lead's column when there is one.
             .children(extra.map(|e| div().when(!matches!(r.lead, Lead::None), |d| d.ml(px(28.))).when(matches!(r.extra, Some(Extra::Hint(_))), |d| d.mt(px(-6.))).child(e)));
         match r.act.clone() {
             Some(act) => self
@@ -2286,13 +2130,10 @@ impl Workspace {
     }
 }
 
-/// A small picture of a look.
 fn thumb(kind: Thumb, selected: bool) -> AnyElement {
     let frame = |d: Div| {
         d.rounded(px(7.)).overflow_hidden().map(|d| if selected { d.border_2().border_color(theme::accent()) } else { d.border_1().border_color(theme::composer_edge()) })
     };
-    // Pictures of each appearance, so fixed colours: the page, sidebar, title
-    // line, blocks and accent line of the dark and the light window.
     let window = |light: bool| {
         let [bg, side, line, block] = if light { [0xFCFCFD, 0xF3F3F5, 0x8A8A92, 0xEAEAED] } else { [0x151517, 0x111113, 0x3A3A40, 0x26262A] };
         div()
@@ -2318,12 +2159,10 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
         Thumb::Match => frame(div().w(px(132.)).h(px(82.)).relative())
             .child(window(false))
             .child(
-                // The light half, below the diagonal from top-right to bottom-left.
                 canvas(
                     |_, _, _| (),
                     |b, _, window, _| {
                         let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
-                        // The light window's sidebar, page, blocks and accent line, each cut along the diagonal.
                         let rects = [(0., 0., 30., h, 0xF3F3F5), (30., 0., w, h, 0xFCFCFD), (38., 10., 38. + 43., 14., 0x8A8A92), (38., 22., 38. + 77.4, 31., 0xEAEAED), (38., 36., 38. + 60.2, 45., 0xEAEAED), (38., 50., 38. + 72.2, 59., 0xEAEAED), (38., 64., 38. + 28.8, 66., 0xCC3F00)];
                         for (x0, y0, x1, y1, color) in rects {
                             let part = below_diagonal(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)], w, h);
@@ -2363,7 +2202,6 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
             .children([12., 12., 22.].map(|h| div().h(px(h)).mx(px(10.)).mt(px(6.)).rounded(px(3.)).bg(theme::bg_card())))
             .into_any_element(),
         Thumb::Classic => {
-            // Pluto's own page in the current appearance: page, rule, title, button edges, cell, cell edge.
             let [bg, rule, title, edge, cell, cell_edge] =
                 if theme::is_light() { [0xFFFFFF, 0xE4E4E4, 0xB5B5B5, 0xBDBDBD, 0xF4F4F4, 0xDADADA] } else { [0x1F1F1F, 0x333333, 0x6B6B6B, 0x555555, 0x2A2A2A, 0x3C3C3C] };
             frame(div().w(px(236.)).h(px(110.)).bg(rgb(bg)))
@@ -2388,8 +2226,6 @@ fn thumb(kind: Thumb, selected: bool) -> AnyElement {
     }
 }
 
-/// The part of a polygon on or below the diagonal from a `w` by `h` box's
-/// top-right corner to its bottom-left one.
 fn below_diagonal(polygon: &[(f32, f32)], w: f32, h: f32) -> Vec<(f32, f32)> {
     let side = |(x, y): (f32, f32)| x / w + y / h - 1.;
     let mut out = Vec::new();
@@ -2407,7 +2243,6 @@ fn below_diagonal(polygon: &[(f32, f32)], w: f32, h: f32) -> Vec<(f32, f32)> {
     out
 }
 
-/// About's card: the turtle, the name, the version and build, the credits.
 fn brand() -> impl IntoElement {
     const R: f32 = 22.;
     div()
@@ -2441,7 +2276,6 @@ fn brand() -> impl IntoElement {
         )
 }
 
-/// The debug state dump's part (debug_state.rs): the page as the panel draws it.
 #[cfg(debug_assertions)]
 impl Workspace {
     pub fn settings_debug(&self, cx: &App) -> serde_json::Value {
@@ -2511,10 +2345,6 @@ impl Workspace {
     }
 }
 
-/// Whether the Julia the runtime says it started isn't the one `now` picks. `users` is the user's own
-/// Julia as Settings found it; `chosen` the version of the chosen file, when it was checked. The
-/// runtime starts the Julia that juliaup's launcher would (its Sys.BINDIR), so a chosen launcher
-/// (~/.juliaup/bin/julia) matches the Julia of the same version, not only the same file.
 fn runs_another_julia(now: &endeavor_mcp::julia::Preference, started: &crate::pluto::Started, users: Option<&Option<Result<(String, String), String>>>, chosen: Option<&str>) -> bool {
     use endeavor_mcp::julia::Preference;
     let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).map_or(a == b, |(a, b)| a == b);
@@ -2547,7 +2377,6 @@ mod tests {
         assert!(super::runs_another_julia(&Preference::Auto, &own, yours.as_ref(), None), "yours found, Endeavor's runs");
         assert!(!super::runs_another_julia(&Preference::Auto, &own, Some(&None), None));
     }
-
 
     use super::{Found, Page, Section, closes, marks, matches, unrun_edit};
 

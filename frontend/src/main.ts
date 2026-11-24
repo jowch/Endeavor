@@ -13,16 +13,30 @@ import { initQuote } from "./quote";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initFolded } from "./folded";
+import { initOutOfStep } from "./outofstep";
 import { initRail } from "./rail";
 import { initRunGuard } from "./runguard";
 import { initReveal } from "./reveal";
 import { initSafe } from "./safe";
 import { initState } from "./state";
-import { initTheme } from "./theme";
+import { initTheme, initTokens } from "./theme";
+import { onMarimo } from "./engine";
 import { watchRedraws } from "./redraw";
 
-function init() {
+function initOnMarimo() {
   initState();
+  initTokens();
+  initQuote();
+  initAskBox();
+  initAnnotate();
+  initDebug();
+  send({ type: "ready" });
+}
+
+function init() {
+  if (onMarimo()) return initOnMarimo();
+  initState();
+  initOutOfStep();
   initTheme();
   initQuote();
   initAskBox();
