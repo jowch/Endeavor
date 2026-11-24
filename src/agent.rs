@@ -524,7 +524,7 @@ pub struct Tools {
 }
 
 impl Tools {
-    fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
+    fn headers(&self, key: u64, agent: Agent) -> Vec<HttpHeader> {
         let mut headers = vec![
             HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
             HttpHeader::new("X-Endeavor-Session", key.to_string()),
@@ -536,13 +536,16 @@ impl Tools {
         if let Some(server) = &self.server {
             headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
         }
-        McpServer::Http(McpServerHttp::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers))
+        headers
+    }
+
+    fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
+        McpServer::Http(McpServerHttp::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(self.headers(key, agent)))
     }
 
     fn always_loaded_server(&self, key: u64, agent: Agent) -> serde_json::Value {
-        let McpServer::Http(http) = self.mcp_server(key, agent) else { unreachable!() };
-        let headers: serde_json::Map<String, serde_json::Value> = http.headers.into_iter().map(|h| (h.name, h.value.into())).collect();
-        serde_json::json!({ "type": "http", "url": http.url, "headers": headers, "alwaysLoad": true })
+        let headers: serde_json::Map<String, serde_json::Value> = self.headers(key, agent).into_iter().map(|h| (h.name, h.value.into())).collect();
+        serde_json::json!({ "type": "http", "url": self.bridge.url, "headers": headers, "alwaysLoad": true })
     }
 }
 
