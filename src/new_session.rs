@@ -1,11 +1,3 @@
-//! The new-session screen: recent sessions to pick up, chips for where the
-//! session runs, its folder and its notebook, and the shared composer. The
-//! notebook pane shows a native stand-in (Pluto isn't involved until the
-//! session starts): an empty state for a new notebook, or a static preview of
-//! the chosen one's first cells. On a server, picking it connects (Julia waits
-//! for the session), and its folders and notebooks come through the helper.
-//! On a cluster, a resources chip sets what the session's job asks for.
-
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -32,14 +24,11 @@ use crate::theme::TextButton as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
-    /// The agent creates the notebook when it needs one, of this kind.
     New(Backend),
-    /// The notebook file, in the draft host's rules.
     Existing(String),
 }
 
 impl NotebookChoice {
-    /// The session's notebook kind: the new notebook's, or the file's.
     pub fn kind(&self) -> Backend {
         match self {
             NotebookChoice::New(kind) => *kind,
@@ -48,14 +37,10 @@ impl NotebookChoice {
     }
 }
 
-/// The kinds the chip offers as a new notebook on `host`, in its order, and
-/// lists the files of. R notebooks don't run on Windows until Ember does, so a
-/// Windows computer offers Julia's only; servers run Linux or macOS.
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
     if cfg!(windows) && *host == HostId::ThisMac { &[Backend::Pluto] } else { &Backend::ALL }
 }
 
-/// A notebook file's kind from its name, in any host's rules: `.R` is R's, the rest Julia's.
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     match name.rsplit_once('.') {
@@ -64,13 +49,11 @@ pub fn kind_of_path(path: &str) -> Backend {
     }
 }
 
-/// The kind of new notebook last picked, while the chip offers it on `host`.
 pub fn new_kind(settings: &crate::settings::Settings, host: &HostId) -> Backend {
     let kinds = new_kinds(host);
     settings.notebook_kind.filter(|kind| kinds.contains(kind)).unwrap_or(kinds[0])
 }
 
-/// What the chip calls a new notebook of `kind`.
 pub fn new_notebook_label(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "New Julia notebook",
@@ -79,7 +62,6 @@ pub fn new_notebook_label(kind: Backend) -> &'static str {
     }
 }
 
-/// The language a notebook of `kind` is in, as the chip's rows mark it.
 pub fn language_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "Julia",
@@ -88,7 +70,6 @@ pub fn language_name(kind: Backend) -> &'static str {
     }
 }
 
-/// The name the core knows a session's kind by (`kind` in `endeavor/set_session_folder`).
 pub fn kind_name(kind: Backend) -> &'static str {
     match kind {
         Backend::Pluto => "julia",
@@ -99,75 +80,50 @@ pub fn kind_name(kind: Backend) -> &'static str {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Chip {
-    /// The agent the session runs on.
     Agent,
     Where,
     Folder,
     Notebook,
-    /// The in-app folder browser for a server's disk.
     Browse,
-    /// A cluster job's resources.
     Resources,
 }
 
-/// The new-session screen's state.
 pub struct Draft {
-    /// The machine the session runs on.
     pub host: HostId,
-    /// A short note above the chips (why pressing send did nothing yet).
     pub notice: Option<SharedString>,
-    /// The folder on `host`, in its rules (`Place::path`); unknown until a
-    /// server has said where home is.
     pub folder: Option<String>,
     pub notebook: NotebookChoice,
     pub popover: Option<Chip>,
-    /// Notebooks found in `folder`, newest first.
     pub notebooks: Vec<Found>,
-    /// The chosen existing notebook's first cells, once read.
     pub preview: Option<Preview>,
-    /// The folder popover's search box, and its highlighted row.
     pub search: Entity<InputState>,
     pub selected: usize,
     pub browser: Option<Browser>,
-    /// On a cluster: what this session's job asks for.
     pub resources: Option<Resources>,
     pub partition_menu: bool,
-    /// The resources popover's "Paste an salloc line…" box, while it's open.
     pub salloc: Option<Entity<InputState>>,
     pub salloc_error: Option<String>,
-    /// The mode to start in: an index into `session::app_modes()`. Settings
-    /// keeps the last pick; see `start_mode` for what a session starts in.
     pub mode: usize,
-    /// `mode` was picked on this screen since launch, not only remembered.
     pub mode_picked: bool,
-    /// The agent picked (Settings keeps the last pick). A server session
-    /// runs on Claude whatever this says, when the agent can't (`draft_agent`).
     pub agent: Agent,
 }
 
-/// The server folder browser: the folder shown, and its folders and notebooks once listed.
 pub struct Browser {
     pub host: HostId,
-    /// Picking a notebook file for this session (Locate file…, Open the
-    /// notebook only) rather than the new session's folder.
     pub pick_for: Option<u64>,
-    /// In the host's rules (`Place::path`).
     pub path: String,
     pub listing: Option<Result<Vec<Entry>, String>>,
 }
 
-/// A chip above the new-session composer.
 pub(crate) struct DraftChip {
     pub chip: Chip,
     pub id: &'static str,
     pub icon: Glyph,
     pub label: String,
     pub mono: bool,
-    /// Greyed out and inert while its server connects.
     pub waiting: bool,
 }
 
-/// A session to pick up where you left off.
 pub struct Resume {
     pub title: String,
     pub folder: String,
@@ -183,11 +139,9 @@ enum ResumeTarget {
 
 const RESUME_SHOWN: usize = 3;
 
-/// A first prompt to try, for someone with nothing to pick up.
 pub struct Example {
     icon: Glyph,
     pub prompt: &'static str,
-    /// It asks for the user's own data ("Uses your file"), else it needs none.
     pub uses_file: bool,
 }
 
@@ -198,9 +152,6 @@ pub const EXAMPLES: [Example; 4] = [
     Example { icon: Glyph::Cap, prompt: "Teach me the basics of this notebook's language with a small worked example", uses_file: false },
 ];
 
-/// The folder a new session on This Mac starts in: the last one used there,
-/// else ~/Documents/Endeavor, created at launch so the folder chip and
-/// Browse… have somewhere real to point.
 pub fn default_folder(recent: &[Place]) -> String {
     if let Some(place) = recent.iter().find(|p| p.host == HostId::ThisMac) {
         return place.path.clone();
@@ -214,15 +165,10 @@ fn home() -> PathBuf {
     files::home()
 }
 
-/// `path` on `host` with `home` written as `~`.
 fn tilde_of(host: &HostId, path: &str, home: &str) -> String {
     short_of(host, path, home, cfg!(windows))
 }
 
-/// `tilde_of`, where `windows` says whether This Mac is a Windows computer.
-/// Windows doesn't write the home folder as `~`, so a folder in it reads
-/// from there in Windows' own way (`Documents\Endeavor`), and the home
-/// folder itself in full.
 fn short_of(host: &HostId, path: &str, home: &str, windows: bool) -> String {
     match host.strip_prefix(path, home) {
         Some(rest) if windows && *host == HostId::ThisMac && rest.is_empty() => path.to_owned(),
@@ -233,19 +179,15 @@ fn short_of(host: &HostId, path: &str, home: &str, windows: bool) -> String {
     }
 }
 
-/// `path` with This Mac's home folder written as `~`.
 pub(crate) fn tilde(path: &Path) -> String {
     tilde_of(&HostId::ThisMac, &hosts::text(path), &hosts::text(&home()))
 }
 
-/// Where Browse… opens: ~/Documents/Endeavor, or ~/Documents without it.
 fn browse_start() -> PathBuf {
     let endeavor = home().join("Documents").join("Endeavor");
     if endeavor.is_dir() { endeavor } else { home().join("Documents") }
 }
 
-/// NSOpenPanel opens where it was last left, kept in this user default; GPUI's
-/// prompt has no starting-folder option, so set it before opening the panel.
 #[cfg(target_os = "macos")]
 pub(crate) fn set_open_panel_folder(dir: &Path) {
     use objc2::runtime::AnyObject;
@@ -297,17 +239,11 @@ impl Draft {
         }
     }
 
-    /// The mode a session started now starts in, as the toolbar shows it. A
-    /// remembered Auto doesn't carry to an existing notebook, which opens in
-    /// safe preview: in Auto the agent could let it run without asking, so it
-    /// starts in Ask to run unless Auto was picked here.
     pub fn start_mode(&self) -> usize {
         start_mode(self.mode, self.mode_picked, matches!(self.notebook, NotebookChoice::Existing(_)))
     }
 }
 
-/// `Draft::start_mode` for mode `mode`, `picked` on the screen or not, for an
-/// `existing` notebook or a new one.
 fn start_mode(mode: usize, picked: bool, existing: bool) -> usize {
     let modes = crate::session::app_modes();
     if existing && !picked && modes.get(mode).is_some_and(|c| c.run_without_asking) {
@@ -317,8 +253,6 @@ fn start_mode(mode: usize, picked: bool, existing: bool) -> usize {
 }
 
 impl Workspace {
-    /// Ask `host` about its files: This Mac answers here, a server through its
-    /// helper (once connected). Off the main thread either way.
     pub(crate) fn ask_files(&self, host: &HostId, request: Request, cx: &mut Context<Self>) -> Option<Task<Result<Reply, String>>> {
         match host {
             HostId::ThisMac => Some(cx.background_spawn(async move {
@@ -334,7 +268,6 @@ impl Workspace {
         }
     }
 
-    /// The draft host's cluster settings, if it's a cluster.
     pub fn draft_cluster(&self) -> Option<&Cluster> {
         match &self.draft.host {
             HostId::Server(id) => self.hosts.server(id)?.cluster.as_ref(),
@@ -342,7 +275,6 @@ impl Workspace {
         }
     }
 
-    /// Paste an salloc line: open its box, or apply what's in it.
     fn paste_salloc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(input) = self.draft.salloc.clone() else {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("salloc -p gpu -c 8 --mem=32G -t 8:00:00"));
@@ -381,8 +313,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Ask a connected cluster for its partitions, when the last Test
-    /// connection didn't list them (the resources chip needs them).
     pub fn fetch_partitions(&mut self, host: &HostId, cx: &mut Context<Self>) {
         let HostId::Server(id) = host else { return };
         if self.hosts.server(id).and_then(|s| s.cluster.as_ref()).is_none_or(|c| !c.partitions.is_empty()) {
@@ -395,7 +325,6 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 let Some(server) = this.hosts.servers.iter_mut().find(|s| s.id == id) else { return };
                 let Some(cluster) = server.cluster.as_mut() else { return };
-                // The new-session screen copied the unfitted defaults when this host was picked.
                 let draft = this.draft.resources.as_mut().filter(|_| this.draft.host == HostId::Server(id.clone()));
                 cluster.take_partitions(scheduler.partitions, scheduler.scratch, draft);
                 let _ = this.hosts.save();
@@ -405,7 +334,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The draft host's home folder: This Mac's, or what a connected server said.
     fn draft_home(&self) -> Option<String> {
         match &self.draft.host {
             HostId::ThisMac => Some(hosts::text(&home())),
@@ -420,7 +348,6 @@ impl Workspace {
         }
     }
 
-    /// Look for notebooks in the draft's folder.
     pub fn scan_notebooks(&mut self, cx: &mut Context<Self>) {
         let (host, Some(folder)) = (self.draft.host.clone(), self.draft.folder.clone()) else { return };
         let Some(scan) = self.ask_files(&host, Request::Notebooks { path: folder.clone() }, cx) else { return };
@@ -449,12 +376,10 @@ impl Workspace {
         self.close_popover(window, cx);
     }
 
-    /// A new notebook of the kind last picked.
     pub fn new_notebook_choice(&self) -> NotebookChoice {
         NotebookChoice::New(new_kind(&self.settings, &self.draft.host))
     }
 
-    /// The chip's New Julia notebook or New R notebook: remembered for the next session.
     fn pick_new_notebook(&mut self, kind: Backend, cx: &mut Context<Self>) {
         if self.settings.notebook_kind != Some(kind) {
             self.settings.notebook_kind = Some(kind);
@@ -510,15 +435,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The agent the new session runs on: the one picked, unless it can't
-    /// run sessions where the session would run.
     pub fn draft_agent(&self) -> Agent {
         let agent = self.draft.agent;
         if self.draft.host == HostId::ThisMac || agent.facts().on_servers { agent } else { Agent::Claude }
     }
 
-    /// Pick the new session's agent. It starts now (installing on first use),
-    /// so its sign-in and options are known before the first message.
+    pub fn agent_fallback_text(&self) -> Option<String> {
+        let (picked, used) = (self.draft.agent, self.draft_agent());
+        (picked != used).then(|| format!("{} runs on {} only, so this session uses {}.", picked.facts().name, crate::platform::this_computer!(lower), used.facts().name))
+    }
+
     pub fn set_draft_agent(&mut self, agent: Agent, window: &mut Window, cx: &mut Context<Self>) {
         self.draft.agent = agent;
         if self.settings.agent != agent {
@@ -546,7 +472,6 @@ impl Workspace {
         }))
     }
 
-    /// Close the open chip menu; the composer gets the keyboard back.
     pub fn close_popover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.draft.popover.take().is_some() {
             self.input.update(cx, |s, cx| s.focus(window, cx));
@@ -555,8 +480,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Browse…: the macOS panel for This Mac; for a server, the in-app browser
-    /// starting at the chosen folder (or home).
     fn browse_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.draft.host != HostId::ThisMac {
             let Some(start) = self.draft.folder.clone().or_else(|| self.draft_home()) else { return };
@@ -577,13 +500,10 @@ impl Workspace {
         .detach();
     }
 
-    /// The open folder browser: a session's notebook pick, else the new-session screen's.
     fn browser_mut(&mut self) -> Option<&mut Browser> {
         if self.locate.is_some() { self.locate.as_mut() } else { self.draft.browser.as_mut() }
     }
 
-    /// Show `path` in the open folder browser (the new-session screen's, unless
-    /// a session is picking its notebook).
     pub(crate) fn browse_to(&mut self, path: String, cx: &mut Context<Self>) {
         let (host, pick_for) = match &self.locate {
             Some(b) => (b.host.clone(), b.pick_for),
@@ -620,8 +540,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Recent folders on the draft's host (the current one first if it isn't
-    /// recent) matching the search.
     fn folder_matches(&self, cx: &App) -> Vec<String> {
         let query = self.draft.search.read(cx).value().trim().to_lowercase();
         let host = &self.draft.host;
@@ -645,8 +563,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Sessions to pick up: open ones first (newest first), then Endeavor's past
-    /// sessions by last activity.
     pub fn resumable(&self) -> Vec<Resume> {
         let recorded = |id: &SessionId| self.session_notebooks.get(&id.to_string()).map(Place::name);
         let open = self.sessions.iter().rev().map(|s| Resume {
@@ -749,8 +665,6 @@ impl Workspace {
             )
     }
 
-    /// Example prompts for someone with no sessions to pick up. A click puts
-    /// the prompt in the composer; one that uses a file shows how to add it.
     fn render_examples(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let rows = EXAMPLES.iter().enumerate().map(|(i, example)| {
             let &Example { icon, prompt, uses_file } = example;
@@ -796,7 +710,6 @@ impl Workspace {
             .children(rows)
     }
 
-    /// The connection notice's text ("Notebooks on lab-cluster stopped. …"), and why it stopped.
     pub fn connection_notice_text(&self) -> Option<(String, String)> {
         let name = self.hosts.name(&self.draft.host);
         match self.status(&self.draft.host)? {
@@ -805,9 +718,6 @@ impl Workspace {
         }
     }
 
-    /// Julia on the draft host stopping, in plain words, with Start Julia (and
-    /// what else might help: `fixes`), beside the composer. A failed or
-    /// taken-over connection shows in the notebook pane instead, with Reconnect.
     fn connection_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let host = self.draft.host.clone();
         let (text, reason) = self.connection_notice_text()?;
@@ -845,8 +755,6 @@ impl Workspace {
         )
     }
 
-    /// The chips above the composer: where, a cluster job's resources, the
-    /// folder and the notebook. While a server connects, only Where can be opened.
     pub(crate) fn draft_chips(&self) -> Vec<DraftChip> {
         let connecting = self.draft.host != HostId::ThisMac && self.draft.folder.is_none();
         let notebook_label = match &self.draft.notebook {
@@ -914,10 +822,10 @@ impl Workspace {
             .gap(px(8.))
             .children(self.draft.notice.clone().map(|n| div().text_size(theme::size_meta()).text_color(theme::accent_text()).child(n)))
             .children(self.connection_notice(cx))
+            .children(self.agent_fallback_text().map(|text| div().text_size(theme::size_meta()).text_color(theme::text_muted()).child(text)))
             .child(chips)
     }
 
-    /// A chip's menu, opening upward from the chip's top-left corner.
     fn render_popover(&self, chip: Chip, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (width, body) = match chip {
             Chip::Agent => (240., self.agent_menu(cx).into_any_element()),
@@ -929,7 +837,6 @@ impl Workspace {
         };
         let body = div()
             .id("chip-menu")
-            // The rows' container, so a screen reader can tell where the menu ends.
             .role(if matches!(chip, Chip::Agent | Chip::Where | Chip::Notebook) { Role::Menu } else { Role::Dialog })
             .aria_label(match chip {
                 Chip::Agent => "Assistant",
@@ -953,8 +860,6 @@ impl Workspace {
         div().absolute().top(px(-6.)).left_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::BottomLeft).child(crate::motion::arriving(body, "chip-menu-in", false))))
     }
 
-    /// Pick where the session runs. A server connects now, so its folders can be
-    /// browsed; its folder is the last one used there, else its home.
     pub fn set_draft_host(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
         if host != self.draft.host {
             self.draft.folder = match &host {
@@ -973,7 +878,6 @@ impl Workspace {
                 self.draft.folder = self.draft_home();
             }
             self.scan_notebooks(cx);
-            // A server's sessions are Claude's: its sign-in and options are known before the first message.
             self.ensure_agent(self.draft_agent(), cx);
         }
         self.draft.notice = None;
@@ -1002,7 +906,6 @@ impl Workspace {
                     let state = match self.status(&host) {
                         _ if self.connection(&host).is_some_and(|c| c.lost.is_some()) => Some("Can't reach"),
                         Some(Status::Connecting) => Some("Connecting…"),
-                        // The dot says it.
                         _ if running && !clusters => None,
                         Some(Status::Browsing | Status::Starting | Status::Ready | Status::Died(_)) if !clusters => Some("Connected"),
                         Some(Status::Failed(_)) => Some("Not connected"),
@@ -1042,8 +945,6 @@ impl Workspace {
             .child(add("add-cluster", "Add cluster…", true, cx))
     }
 
-    /// The resources chip's popover: presets, partition, CPUs, memory, time
-    /// limit, and pasting an salloc line.
     fn resources_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (Some(r), Some(cluster)) = (self.draft.resources.as_ref(), self.draft_cluster()) else { return div() };
         let partition = cluster.partition(r.partition.as_deref());
@@ -1174,9 +1075,6 @@ impl Workspace {
             )
     }
 
-    /// A server's folder browser: where it is (each part a way back up), its
-    /// folders to open, and its notebooks: for orientation and "Choose this
-    /// folder", or, when picking a session's notebook, to pick.
     pub(crate) fn browser_menu(&self, browser: &Browser, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let path = browser.path.clone();
         let host = browser.host.clone();
@@ -1234,7 +1132,6 @@ impl Workspace {
                             }))
                             .into_any_element()
                     } else {
-                        // Notebooks show where they are; only folders open.
                         div()
                             .flex()
                             .items_center()
@@ -1326,7 +1223,6 @@ impl Workspace {
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
     }
 
-    /// The new-session screen, set to start in `folder` on `notebook` (its preview shows).
     pub fn new_session_on(&mut self, folder: Place, notebook: String, cx: &mut Context<Self>) {
         self.active = None;
         if folder.host != self.draft.host || Some(&folder.path) != self.draft.folder.as_ref() {
@@ -1339,7 +1235,6 @@ impl Workspace {
         self.choose_notebook(NotebookChoice::Existing(notebook), cx);
     }
 
-    /// The notebook pane's header before the session starts.
     pub fn draft_pane_header(&self) -> AnyElement {
         match &self.draft.notebook {
             NotebookChoice::New(kind) => div().text_color(theme::text_muted()).child(new_notebook_label(*kind)).into_any_element(),
@@ -1350,9 +1245,6 @@ impl Workspace {
         }
     }
 
-    /// The notebook pane before the session starts (the web view is hidden).
-    /// The draft's folder, while its host can be reached: the pane shows what
-    /// the session will open. None: the pane shows the host's state instead.
     pub fn draft_pane_folder(&self) -> Option<&String> {
         let host = &self.draft.host;
         let unreachable = matches!(self.status(host), Some(Status::Failed(_))) || self.connection(host).is_some_and(|c| c.lost.is_some());
@@ -1452,8 +1344,6 @@ impl Workspace {
 
 const TURTLE_R: f32 = 22.;
 
-/// The notebook pane's native stand-in: the turtle peeking out of its shell now
-/// and then (a still frame under Reduce motion), above the caller's lines.
 pub fn turtle_pane() -> Div {
     div()
         .size_full()
@@ -1480,12 +1370,10 @@ pub fn turtle_pane() -> Div {
         )
 }
 
-/// A file or folder name inside a line of text.
 pub fn file_name(name: String) -> Div {
     div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_secondary()).child(name)
 }
 
-/// A notebook pane header: the notebook's file name, then its folder, faint.
 pub fn notebook_title(name: String, dir: Option<String>) -> Div {
     div()
         .flex()
@@ -1499,9 +1387,6 @@ pub fn notebook_title(name: String, dir: Option<String>) -> Div {
         }))
 }
 
-/// A chip-menu row: a ✓ column, then the caller's icon and text. It's a menu
-/// item named `name` (GPUI makes no accessibility node for an element without
-/// a role); a row that picks one of several is a `choice_row`.
 pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool, name: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
@@ -1519,14 +1404,10 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool, 
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
 }
 
-/// A menu row that picks one of several: a screen reader says whether it's
-/// the one checked.
 pub(crate) fn choice_row(id: impl Into<ElementId>, checked: bool, selected: bool, name: impl Into<SharedString>) -> Stateful<Div> {
     menu_row(id, checked, selected, name).role(Role::MenuItemRadio).aria_toggled(if checked { accesskit::Toggled::True } else { accesskit::Toggled::False })
 }
 
-/// A Where menu row: ✓, the machine's icon and name (with a dot while Julia
-/// runs there), its connection state if any, and room for its gear.
 #[allow(clippy::too_many_arguments)]
 fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, running: bool, state: Option<&'static str>, group: impl Into<SharedString>, _: &mut Context<Workspace>) -> Stateful<Div> {
     choice_row(id, checked, false, name.clone())
@@ -1546,7 +1427,6 @@ fn host_row(id: impl Into<ElementId>, checked: bool, icon: Glyph, name: String, 
         .children(state.map(|s| div().flex_shrink_0().text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(s)))
 }
 
-/// A host's settings button, shown while the pointer is over its row.
 fn gear_button(id: impl Into<ElementId>, group: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
@@ -1575,108 +1455,63 @@ pub(crate) enum Glyph {
     Folder,
     File,
     Chevron,
-    /// A chevron pointing up (find's previous match).
     ChevronUp,
     Search,
-    /// Filters: two horizontal tracks, each with a ring knob at its value.
     Sliders,
     Archive,
     Server,
     Plus,
     Gear,
-    /// A cluster: four nodes.
     Cluster,
-    /// A cluster job's resources: a chip with pins.
     Chip,
-    /// A notebook cell: a box with lines of code.
     Code,
-    /// Several cells, stacked.
     Cells,
-    /// Selected text: lines.
     Lines,
-    /// An error: a warning triangle.
     Warning,
     Picture,
-    /// A region drawn with Point: a dashed box.
     Region,
-    /// The pointing arrow (Point).
     Pointer,
-    /// Slash commands: a boxed slash.
     Slash,
-    /// Send.
     ArrowUp,
-    /// Share / export: a tray with an arrow out.
     Share,
-    /// Live docs: an open book.
     Book,
-    /// Status: a pulse line.
     Pulse,
-    /// Safe preview: a shield.
     Shield,
-    /// Restart: a circling arrow.
     Restart,
-    /// Run / Start: a play triangle.
     Play,
-    /// Stop: a square.
     Stop,
     Copy,
-    /// Rename.
     Pencil,
     Keyboard,
-    /// A file that isn't there.
     FileX,
-    /// Feedback: a speech bubble.
     Bubble,
-    /// Present: a screen.
     Screen,
-    /// Record: a dot in a ring.
     Record,
-    /// Frontmatter: a tag.
     Tag,
-    /// A die: a rounded square with five pips.
     Dice,
-    /// A table: a box with a header row and a first column.
     Table,
-    /// A fitted curve: axes and a decaying line.
     Curve,
-    /// Learning: a mortarboard.
     Cap,
-    /// Waiting to send: a clock face.
     Clock,
-    /// Offline: wifi arcs struck through.
     WifiOff,
     Check,
-    /// Read-only, and a password kept in the browser.
     Lock,
-    /// Opens a web page: an arrow out of a box.
     External,
-    /// Back: a chevron pointing left.
     Back,
-    /// Onward: a chevron pointing right.
     Forward,
-    /// Close: a cross.
     Close,
-    /// Light or dark: a circle, its right half filled.
     Contrast,
-    /// Troubleshooting: a wrench.
     Wrench,
-    /// About, and a note: an i in a circle.
     Info,
-    /// Finder: a window split down the middle.
     Finder,
-    /// Undo: an arrow turning back.
     Undo,
-    /// An agent: a four-pointed spark.
     Spark,
 }
 
-/// A 12px line icon (the app ships no icon set).
 pub(crate) fn glyph(glyph: Glyph, color: Rgba) -> impl IntoElement {
     glyph_at(glyph, color, 1.)
 }
 
-/// A line icon drawn `scale` times its 12px size (the stroke stays 1px, or
-/// 1.5px for the sliders, whose short tracks and knobs vanish at 1px).
 pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElement {
     const SIZE: f32 = 12.;
     canvas(
@@ -1711,7 +1546,6 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                     polyline(&[(7.6, 7.6), (11., 11.)]);
                 }
                 Glyph::Sliders => {
-                    // Each 1.5px track's edges fall on whole pixels at 2x.
                     for (y, knob) in [(3.25, 4.), (8.75, 8.)] {
                         let r = 1.75;
                         polyline(&[(0.75, y), (knob - r, y)]);
@@ -1948,7 +1782,6 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
                         })
                         .collect();
                     polyline(&ring);
-                    // The stroke only draws lines, so the filled half is hatched densely.
                     for i in 0..9 {
                         let x = 6. + 0.5 * i as f32;
                         let h = (r * r - (x - 6.) * (x - 6.)).max(0.).sqrt();
@@ -2032,12 +1865,10 @@ mod tests {
         let modes = crate::session::app_modes();
         let at = |name: &str| modes.iter().position(|c| c.name == name).unwrap();
         let (manual, ask, auto, plan) = (at("Manual"), at("Ask to run"), at("Auto"), at("Plan"));
-        // A new notebook starts in what was remembered or picked.
         for mode in [manual, ask, auto, plan] {
             assert_eq!(super::start_mode(mode, false, false), mode);
             assert_eq!(super::start_mode(mode, true, false), mode);
         }
-        // An existing notebook opens in safe preview: only Auto picked on the screen lets it run without asking.
         assert_eq!(super::start_mode(auto, false, true), ask);
         assert_eq!(super::start_mode(auto, true, true), auto);
         for mode in [manual, ask, plan] {
@@ -2071,7 +1902,6 @@ mod tests {
         assert_eq!(short_of(&here, "/Users/jc", "/Users/jc", true), "/Users/jc");
         assert_eq!(short_of(&here, "/srv/data", "/Users/jc", true), "/srv/data");
         assert_eq!(short_of(&here, "/Users/jc/Documents", "/Users/jc", false), "~/Documents");
-        // A server's paths are Linux paths, from any computer.
         let lab = HostId::Server("lab".into());
         assert_eq!(short_of(&lab, "/home/jc/qpcr", "/home/jc", true), "~/qpcr");
     }

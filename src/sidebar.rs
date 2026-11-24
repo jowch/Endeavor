@@ -1,6 +1,3 @@
-//! The sidebar: the session list, its folders and filter menu, search, and
-//! the status line at the bottom.
-
 use agent_client_protocol::schema::v1::SessionId;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -16,9 +13,6 @@ use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
 
-/// A 28px sidebar row (sessions, "New session"). Its transparent border is
-/// where a focus ring draws; with the padding, content starts 18px in from
-/// the sidebar's edge and ends 18px before its other edge.
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
     div()
         .id(id)
@@ -38,19 +32,14 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
         .hover(|s| s.bg(theme::row_active()))
 }
 
-/// Past sessions listed per folder before "Show more".
 const PAST_SHOWN: usize = 8;
 
-
-/// A session in the sidebar: an open one, or a past one listed under its folder.
 #[derive(Clone, PartialEq)]
 pub(crate) enum Row {
     Open(u64),
     Past(SessionId, Place),
 }
 
-/// A session being renamed and its name box: in its sidebar row, or in the
-/// chat header when the session menu's Rename opened it.
 pub(crate) struct Rename {
     pub(crate) row: Row,
     pub(crate) input: Entity<InputState>,
@@ -65,7 +54,6 @@ pub(crate) enum RowAction {
     Unarchive,
     Close,
     Delete,
-    /// The session menu's list of the agent's rules for the folder (not in a row's ⋮ menu).
     FolderRules,
 }
 
@@ -84,8 +72,6 @@ impl RowAction {
         }
     }
 
-    /// The key that picks it while the menu is open (`Keystroke::key`), and how
-    /// the menu shows that key.
     pub(crate) fn shortcut(self) -> (&'static str, &'static str) {
         match self {
             RowAction::Rename => ("r", "R"),
@@ -97,9 +83,6 @@ impl RowAction {
         }
     }
 
-    /// A row's menu; Delete comes last, after a separator. `archived` is None for
-    /// a session the agent hasn't given an id yet, which can't be archived.
-    /// Finder can only reveal This Mac's folders.
     pub(crate) fn for_row(row: &Row, archived: Option<bool>, local: bool) -> Vec<RowAction> {
         Self::ALL
             .into_iter()
@@ -114,7 +97,6 @@ impl RowAction {
     }
 }
 
-/// A row of the sidebar's filter menu that opens a submenu.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum FilterRow {
     Status,
@@ -136,22 +118,15 @@ impl FilterRow {
     }
 }
 
-/// The sidebar's filter menu (the sliders button), and its open submenu if any.
 pub(crate) struct FilterMenu {
-    /// The row whose submenu is open, if any; the main menu otherwise.
     submenu: Option<FilterRow>,
-    /// The item selected by the arrow keys, in whichever level is open.
     selected: Option<usize>,
     focus: FocusHandle,
-    /// Focus to give back when the menu closes.
     restore: Option<FocusHandle>,
 }
 
-/// Something the filter menu's main rows or a submenu's rows pick, shared by
-/// click and keyboard handling (arrow keys, Enter/Space), like `MenuPick`.
 #[derive(Clone, PartialEq)]
 enum FilterPick {
-    /// A main-menu row that opens a submenu.
     Open(FilterRow),
     Status(sidebar_filter::StatusFilter),
     WhereAll,
@@ -162,21 +137,14 @@ enum FilterPick {
     Clear,
 }
 
-/// The column every row's leading bullet, "New session"'s + and the status
-/// line's mark sit in, so the words after them all start at one x.
 fn bullet_slot() -> Div {
     div().flex_shrink_0().w(px(12.)).h(px(12.)).flex().items_center().justify_center()
 }
 
-/// A 24px icon button in the sidebar's right column: drawn 6px into its
-/// row's 18px end inset, so its centre is 24px from the sidebar's right
-/// edge, like the ⋮, the folders' +, the filter button and the gear.
 fn end_button(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).role(Role::Button).flex_shrink_0().size(px(24.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
 }
 
-/// The ⋮ button at a row's end: shown while the pointer is over the row
-/// (`group`), and always on the active row or while its menu is open.
 fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> Stateful<Div> {
     end_button(id)
         .aria_label("Session actions")
@@ -190,15 +158,11 @@ fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> St
         .child("⋮")
 }
 
-/// The mark before the status line's words.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum StatusMark {
     Offline,
-    /// An orange dot.
     SignedOut,
-    /// A spinner: it fixes itself.
     Waiting,
-    /// A red dot: it needs the user.
     NeedsYou,
 }
 
@@ -223,12 +187,8 @@ impl StatusMark {
     }
 }
 
-/// The marks drawn as icons, 9px: as small as they stay legible, near the dots' 6px.
 const MARK_GLYPH: f32 = 0.75;
 
-/// A row's leading bullet: its mark in `bullet_slot`, with the mark's words
-/// as the tooltip, or a faint ring when it has none. The waiting count is in
-/// the words, so the slot keeps its width.
 fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
     let id = id.into();
     let slot = bullet_slot().id(id.clone());
@@ -243,7 +203,6 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
             if breath.is_zero() {
                 dot(6.).bg(theme::text_muted()).into_any_element()
             } else {
-                // Breathing at crate::motion::looping's pace, not every frame.
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, cx| {
@@ -264,9 +223,6 @@ fn bullet(id: impl Into<ElementId>, mark: Option<RowMark>) -> Stateful<Div> {
     slot.child(icon).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(words.clone()).build(window, cx))
 }
 
-/// `text` with the first case-insensitive match of `query` picked out in
-/// `theme::accent_text()`, for the sidebar search's highlighting. With no
-/// match (or an empty query), the plain, truncating text.
 fn highlighted_span(text: &str, query: &str) -> AnyElement {
     let q = query.trim();
     let start = (!q.is_empty()).then(|| text.to_lowercase().find(&q.to_lowercase())).flatten();
@@ -302,7 +258,6 @@ impl Workspace {
         RowAction::for_row(row, archived, local)
     }
 
-    /// Archive a session (closing it if it's open), or bring it back.
     fn set_archived(&mut self, row: Row, archive: bool, cx: &mut Context<Self>) {
         let Some(id) = self.row_session_id(&row) else { return };
         let changed = if archive { self.archived.insert(id.to_string()) } else { self.archived.remove(&id.to_string()) };
@@ -315,7 +270,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Open the sidebar's filter menu (the sliders button).
     fn open_filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restore = window.focused(cx);
         let focus = cx.focus_handle();
@@ -336,7 +290,6 @@ impl Workspace {
         self.close_filter_menu(window, cx);
     }
 
-    /// Where checkboxes: several can be ticked, so the menu stays open.
     fn toggle_where_host(&mut self, host: HostId, cx: &mut Context<Self>) {
         self.update_settings(cx, |s| {
             if !s.sidebar_filters.where_hosts.remove(&host) {
@@ -369,7 +322,6 @@ impl Workspace {
         self.close_filter_menu(window, cx);
     }
 
-    /// A folder's sidebar heading collapses or expands.
     fn toggle_folder_collapsed(&mut self, folder: Place, cx: &mut Context<Self>) {
         self.update_settings(cx, |s| {
             if !s.collapsed_folders.remove(&folder) {
@@ -378,7 +330,6 @@ impl Workspace {
         });
     }
 
-    /// Open the sidebar's inline search field, in place of the "Sessions" heading.
     pub(crate) fn open_sidebar_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar_search.is_some() {
             return;
@@ -410,22 +361,15 @@ impl Workspace {
         }
     }
 
-    /// A row's notebook file name, for the search's second field (matches on
-    /// the notebook a session started with or later opened, whether it's
-    /// open now or a past session).
     fn row_notebook_name(&self, row: &Row) -> Option<String> {
         let id = self.row_session_id(row)?;
         self.session_notebooks.get(&id.to_string()).map(Place::name)
     }
 
-    /// Whether the sidebar has any session at all, open or past, before any
-    /// filter or search: it hides the "Sessions" heading when there's none.
     fn any_sessions_at_all(&self) -> bool {
         !self.sessions.is_empty() || self.records.any_placed()
     }
 
-    /// The +'s "New session in <folder>": opens the new-session screen with
-    /// that folder, and its host, already chosen.
     fn start_session_in(&mut self, folder: Place, window: &mut Window, cx: &mut Context<Self>) {
         self.active = None;
         if folder.host != self.draft.host {
@@ -440,7 +384,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A row's name as the sidebar shows it.
     pub(crate) fn row_title(&self, row: &Row) -> Option<String> {
         match row {
             Row::Open(key) => self.sessions.iter().find(|s| s.key == *key).map(|s| s.title.clone()),
@@ -496,8 +439,6 @@ impl Workspace {
         }
     }
 
-    /// Open a session's name box: in its sidebar row, or `in_header`, in the
-    /// chat header's title (the session menu's Rename).
     pub(crate) fn start_rename(&mut self, row: Row, in_header: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(title) = self.row_title(&row) else { return };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(title));
@@ -515,7 +456,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Keep the typed name (an empty one leaves the title as it was).
     fn finish_rename(&mut self, cx: &mut Context<Self>) {
         let Some(Rename { row, input, .. }) = self.renaming.take() else { return };
         let name = input.read(cx).value().trim().to_string();
@@ -537,18 +477,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The sidebar's status line: app-wide states only, with a mark when it
-    /// matters to every session (red only when something needs the user).
     pub(crate) fn status_line(&self) -> (Option<StatusMark>, SharedString) {
         if self.offline_since.is_some() {
             return (Some(StatusMark::Offline), "Offline · reconnects by itself".into());
         }
-        // Only for someone using Claude: a Codex or Antigravity user needn't sign in to it.
         if self.account.signed_out() && self.uses_agent(crate::agent::Agent::Claude) {
             return (Some(StatusMark::SignedOut), "Signed out of Claude.".into());
         }
-        // An assistant started in the background (Claude, to list its sessions)
-        // that stops doesn't take the line from the one in use.
         for agent in crate::agent::Agent::ALL.into_iter().filter(|a| self.uses_agent(*a)) {
             match self.links.get(agent).process.state {
                 crate::agent_process::State::Restarting => return (Some(StatusMark::Waiting), format!("Restarting {}…", agent.name()).into()),
@@ -562,23 +497,17 @@ impl Workspace {
         (None, self.status.clone())
     }
 
-    /// The user uses `agent`: it's the default or the new-session screen's, or a session open now is its.
     fn uses_agent(&self, agent: crate::agent::Agent) -> bool {
         self.settings.agent == agent || self.draft_agent() == agent || self.sessions.iter().any(|s| s.agent == agent)
     }
 
-    /// A past sidebar row's Tab-stop handle, cached by session id across renders.
     fn past_row_focus(&self, id: &SessionId, cx: &App) -> FocusHandle {
         self.past_row_focus.borrow_mut().entry(id.clone()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
-    /// A session's sidebar row: right-click opens its menu, and it stays lit while
-    /// the menu is open.
     fn session_row(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let menu_open = self.menu.as_ref().is_some_and(|menu| menu.target == MenuTarget::Row(row.clone()));
         sidebar_row(ElementId::Name(group.clone()), active)
-            // The dark-contrast raise (theme.rs): sidebar session rows read
-            // lighter than folder headings (`text_section`), which keep `text_muted`.
             .when(!active, |d| d.text_color(theme::text_row()))
             .group(group)
             .when(menu_open, |d| d.bg(theme::row_active()))
@@ -588,11 +517,6 @@ impl Workspace {
             )
     }
 
-    /// A row's title, or its name box while it's being renamed. Its second
-    /// line is `folder_line` when given (Group by: None, so each flattened
-    /// row still names its folder); otherwise, while searching, a match on
-    /// the row's notebook name, highlighted there. The title itself is
-    /// highlighted while searching either way.
     fn row_lines(&self, row: &Row, title: &str, query: &str, folder_line: Option<&str>) -> Div {
         if let Some(Rename { row: renaming, input, in_header: false }) = &self.renaming
             && renaming == row
@@ -620,9 +544,6 @@ impl Workspace {
             .children(second.map(|el| div().font_family(theme::MONO).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(el)))
     }
 
-    /// The chat header's session title and ⌄, which opens the session menu (a
-    /// sidebar row's ⋮ menu, for the open session); while renamed from that
-    /// menu, its name box instead.
     pub(crate) fn session_title(&self, key: u64, title: String, cx: &mut Context<Self>) -> AnyElement {
         if let Some(Rename { row: Row::Open(renaming), input, in_header: true }) = &self.renaming
             && *renaming == key
@@ -665,7 +586,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A row's ⋮ button, and its menu while open.
     fn row_more(&self, row: Row, group: SharedString, active: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let menu = self.menu.as_ref().filter(|menu| menu.target == MenuTarget::Row(row.clone()));
         more_button(ElementId::Name(format!("{group}-more").into()), group, active || menu.is_some())
@@ -676,7 +596,6 @@ impl Workspace {
             }))
     }
 
-    /// A folder's name, with its server's for a folder on one ("decay-fits · lab").
     pub(crate) fn folder_heading(&self, place: &Place) -> String {
         match place.host {
             HostId::ThisMac => place.name(),
@@ -684,9 +603,6 @@ impl Workspace {
         }
     }
 
-    /// The sidebar's folders: recent ones, then any other folder with an open
-    /// session, filtered by Where and ordered for Group by ("Folder" and
-    /// "None" keep this order; "Where it runs" clusters folders on one host).
     pub(crate) fn sidebar_folders(&self) -> Vec<Place> {
         let mut folders: Vec<Place> = self.recent.clone();
         for s in &self.sessions {
@@ -699,8 +615,6 @@ impl Workspace {
         sidebar_filter::order_folders(folders, self.settings.sidebar_filters.group_by)
     }
 
-    /// For a past session its agent's latest listing left out (signed out, a
-    /// fresh profile, a list that failed partway): the row's tooltip.
     pub(crate) fn unlisted_words(&self, id: &SessionId) -> Option<SharedString> {
         let id = id.to_string();
         if !self.records.is_missing(&id) {
@@ -710,8 +624,6 @@ impl Workspace {
         Some(format!("{agent} didn't list this session, so it may be signed out or on another account. Endeavor keeps the session; open it to try again.").into())
     }
 
-    /// A folder's past sessions the sidebar lists, newest first: recorded, not
-    /// already open, and matching the Status filter.
     fn past_rows(&self, folder: &Place) -> Vec<SessionId> {
         let is_open = |id: &str| self.sessions.iter().any(|s| s.id.as_ref().is_some_and(|s| s.to_string() == id));
         let status = self.settings.sidebar_filters.status;
@@ -723,8 +635,6 @@ impl Workspace {
             .collect()
     }
 
-    /// The sidebar's row above the status line while This Mac's runtime is down. It restarts every
-    /// notebook here, Julia's and R's, so it names neither.
     pub(crate) fn restart_row(&self) -> Option<&'static str> {
         match self.status(&HostId::ThisMac) {
             Some(connection::Status::Died(_) | connection::Status::Failed(_)) => Some("↻ Restart notebooks"),
@@ -732,8 +642,6 @@ impl Workspace {
         }
     }
 
-    /// An open session's row mark (see `row_marks`). Working is what the
-    /// composer's orbit shows, not its grey "Waiting for the connection".
     pub(crate) fn row_mark(&self, s: &Session) -> Option<RowMark> {
         let host_down = s.place.host != HostId::ThisMac && self.connections.get(&s.place.host).is_some_and(|c| c.lost.is_some());
         let held = s.outbox.held && !s.outbox.items.is_empty() && !self.links.get(s.agent).process.up();
@@ -749,18 +657,10 @@ impl Workspace {
         })
     }
 
-    /// A collapsed folder's mark: the strongest of its open sessions'.
     pub(crate) fn folder_mark(&self, folder: &Place) -> Option<RowMark> {
         row_marks::strongest(self.sessions.iter().filter(|s| &s.place == folder).filter_map(|s| self.row_mark(s)))
     }
 
-    /// A folder's rows to show (Status- and search-filtered, sorted by Sort
-    /// by, past sessions cut to `PAST_SHOWN` unless expanded, searching or
-    /// `flat`), its "Show N more"/"Show fewer" label (never, when `flat`:
-    /// Group by None has no folder heading for it to expand), and its total
-    /// row count before the `PAST_SHOWN` cut (0 means genuinely empty, for
-    /// Show empty folders). `flat` is Group by None's flattened list, which
-    /// has no collapsed folders either.
     pub(crate) fn folder_rows(&self, folder: &Place, query: &str, collapsed: bool, flat: bool) -> (Vec<Row>, Option<(String, bool)>, usize) {
         let searching = !query.trim().is_empty();
         let mut open: Vec<(Row, String)> =
@@ -790,8 +690,6 @@ impl Workspace {
         (rows, more, total)
     }
 
-    /// One sidebar row (open or past), with its title/notebook lines, end
-    /// mark, focus handle and click behavior.
     fn render_sidebar_row(&self, row: Row, query: &str, flat: bool, cx: &mut Context<Self>) -> AnyElement {
         match row.clone() {
             Row::Open(key) => {
@@ -811,7 +709,6 @@ impl Workspace {
                     .child(bullet(ElementId::NamedInteger("row-bullet".into(), key), row_mark))
                     .child(title)
                     .child(self.row_more(row.clone(), group, active, cx))
-                    // Double-click renames.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if e.click_count() >= 2 {
                             this.start_rename(Row::Open(key), false, window, cx);
@@ -827,7 +724,6 @@ impl Workspace {
                 let title = self.row_lines(&row, &title_text, query, folder_line.as_deref());
                 let group: SharedString = format!("past-{:?}-{}-{id}", place.host, place.path).into();
                 let archived = self.archived.contains(&id.to_string());
-                // Its agent's listing left it out: kept, and says so.
                 let missing = self.unlisted_words(&id);
                 let focus = self.past_row_focus(&id, cx);
                 let mut label = title_text;
@@ -869,14 +765,6 @@ impl Workspace {
         }
     }
 
-    /// A folder's heading: its name (with a collapse chevron via "name ›"
-    /// when collapsed) starting at the rows' bullet column, and a "New
-    /// session in <folder>" + always visible in the rows' ⋮ column. A
-    /// collapsed folder shows its rows' strongest mark after the "›".
-    /// Clicking the name collapses or expands; clicking + starts a session
-    /// there. Each is its own Tab stop with the sidebar's focus ring. The
-    /// first folder sits right under "Sessions"; the others are 16px below
-    /// the folder before, so a heading is nearer its own rows.
     fn render_folder_heading(&self, folder: &Place, first: bool, collapsed: bool, mark: Option<RowMark>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = self.folder_heading(folder);
         let key = format!("{:?}-{}", folder.host, folder.path);
@@ -934,8 +822,6 @@ impl Workspace {
         let show_empty = self.settings.sidebar_filters.show_empty_folders;
         let group_by_none = self.settings.sidebar_filters.group_by == sidebar_filter::GroupBy::None;
         let mut any_matched = false;
-        // Group by None: one flat list, no folder headings (so no + either --
-        // "New session" covers it), sorted by Sort by across every folder.
         let groups: Vec<AnyElement> = if group_by_none {
             let mut rows: Vec<(Row, String)> = self
                 .sidebar_folders()
@@ -1003,18 +889,14 @@ impl Workspace {
             .px(px(6.))
             .pb(px(10.))
             .bg(theme::bg_sidebar())
-            // A tab group of its own, so Tab reaches every sidebar control
-            // before the main column's, whatever order they paint in.
             .tab_group()
             .tab_index(0)
             .track_focus(&self.sidebar_focus)
-            // The traffic lights sit in this header (see TitlebarOptions in main()).
             .child(
                 column_header("sidebar-header")
                     .mx(px(-6.))
                     .justify_end()
                     .px(px(10.))
-                    // Where there's no menu bar, the app's menu starts the header.
                     .when(!cfg!(target_os = "macos"), |d| d.justify_between().child(self.app_menu_button(cx)))
                     .child(sidebar_toggle(self, cx)),
             )
@@ -1027,7 +909,6 @@ impl Workspace {
                     .focus_visible(|s| s.border_color(theme::focus_ring()))
                     .child(bullet_slot().child(glyph(Glyph::Plus, theme::text_faint())))
                     .child(div().flex_1().child("New session"))
-                    // Centred on the right column while it fits its 24px; Ctrl+N grows leftwards.
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1048,9 +929,6 @@ impl Workspace {
                 }))
             })
             .child(
-                // The fade is a sibling of the scrolling list, not a child of
-                // it: a child would scroll away with the rest of the content
-                // instead of staying put over the top of the list.
                 div()
                     .relative()
                     .flex_1()
@@ -1124,7 +1002,6 @@ impl Workspace {
                             .text_color(if mark.is_some() { theme::text_new() } else { theme::text_section() })
                             .children(mark)
                             .child(div().min_w_0().truncate().child(status.clone()))
-                            // Wrapped narrow enough to stay clear of the notebook, which covers anything drawn over it.
                             .tooltip(move |window, cx| {
                                 let status = status.clone();
                                 gpui_component::tooltip::Tooltip::element(move |_, _| div().max_w(px(260.)).child(status.clone())).build(window, cx)
@@ -1168,7 +1045,6 @@ impl Workspace {
             )
     }
 
-    /// The "Sessions" heading row: a search button and the filter button on the right.
     fn render_sessions_heading(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .h(px(28.))
@@ -1191,7 +1067,6 @@ impl Workspace {
             .child(self.render_filter_menu_button(cx))
     }
 
-    /// The inline search field that replaces the "Sessions" heading while open.
     fn render_sidebar_search(&self, input: &Entity<InputState>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let empty = input.read(cx).value().trim().is_empty();
         let input = input.clone();
@@ -1222,9 +1097,6 @@ impl Workspace {
             )
     }
 
-    /// Everything a filter-menu row or submenu item picks, for the row it's
-    /// at (`None` for the main menu): the main menu's rows in order, then
-    /// (only when open) that row's submenu's own rows, mirroring `menu_picks`.
     fn filter_picks(&self, submenu: Option<FilterRow>) -> Vec<FilterPick> {
         match submenu {
             None => {
@@ -1257,7 +1129,6 @@ impl Workspace {
             }
             FilterPick::Status(status) => self.set_status_filter(status, window, cx),
             FilterPick::WhereAll => self.set_where_all(window, cx),
-            // Several hosts can be ticked, so this doesn't close the menu.
             FilterPick::WhereHost(host) => self.toggle_where_host(host, cx),
             FilterPick::GroupBy(g) => self.set_group_by(g, window, cx),
             FilterPick::SortBy(s) => self.set_sort_by(s, window, cx),
@@ -1266,9 +1137,6 @@ impl Workspace {
         }
     }
 
-    /// Up/Down move the selection in whichever level is open; Enter/Space
-    /// activates it; Left backs out of a submenu; Right opens one. Esc is
-    /// handled by the menu body's own `on_action`, like the row ⋮ menu's.
     fn filter_menu_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(submenu) = self.filter_menu.as_ref().map(|m| m.submenu) else { return };
         let picks = self.filter_picks(submenu);
@@ -1310,8 +1178,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The sliders button, and the filter menu (Status, Where, Group by, Sort
-    /// by, Show empty folders, Clear filters) while open.
     fn render_filter_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let changed = !self.settings.sidebar_filters.is_default();
         let color = if changed { theme::accent_text() } else { theme::text_secondary() };
@@ -1333,9 +1199,6 @@ impl Workspace {
             }))
     }
 
-    /// The filter menu's main panel: each row shows its current value and ›
-    /// and opens a submenu, then Show empty folders (a toggle) and, only when
-    /// something differs from the defaults, Clear filters.
     fn render_filter_menu(&self, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let filters = self.settings.sidebar_filters.clone();
         let where_label = sidebar_filter::where_label(&filters.where_hosts, |h| self.hosts.name(h));
@@ -1437,8 +1300,6 @@ impl Workspace {
         div().absolute().top(px(26.)).right_0().child(crate::layer::place(crate::layer::Layer::Popover, anchored().anchor(Anchor::TopRight).child(crate::motion::arriving(body, "filter-menu-in", true))))
     }
 
-    /// A filter row's flyout submenu: Status, Group by and Sort by are
-    /// single-choice (✓ radio); Where is several-choice (✓ checkbox, stays open).
     fn render_filter_submenu(&self, submenu: FilterRow, menu: &FilterMenu, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let picks = self.filter_picks(Some(submenu));
         let filters = &self.settings.sidebar_filters;

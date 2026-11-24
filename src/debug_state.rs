@@ -232,7 +232,7 @@ impl Workspace {
             "channel": crate::updater::CHANNEL,
             "commit": crate::updater::COMMIT,
             "committed": crate::updater::COMMITTED,
-            "app": u.place.as_ref().ok().map(|p| json!({ "path": p.app, "replaceable": p.replaceable })),
+            "app": u.place.as_ref().ok().map(|p| json!({ "path": p.app, "replaceable": p.replaceable, "protected": p.protected })),
             "update": state,
         })
     }
@@ -404,6 +404,7 @@ impl Workspace {
             "mode": self.mode_label(None),
             "notice": self.draft.notice.as_ref().map(|n| n.to_string()),
             "connection_notice": self.connection_notice_text().map(|(text, _)| text),
+            "agent_fallback": self.agent_fallback_text(),
             "resume": (!resume.is_empty()).then(|| resume.iter().map(|r| json!({
                 "title": r.title,
                 "meta": std::iter::once(r.folder.clone()).chain(r.notebook.clone()).collect::<Vec<_>>().join(" · "),

@@ -5,6 +5,7 @@ Handoff for implementing the redesigned chat + notebook interface.
 - **Target states (source of truth for look):** https://claude.ai/artifact/Y4NunVg55n9zNtL2oz7bUV — nine 1440×900 boards. Read exact values from the boards' `.dc.html` sources; do not port the markup.
 - **Exploration history (why decisions were made):** https://claude.ai/artifact/Ws1rn2Dyuo9Q2cqQBZD2VA
 - Both canvases are private until shared from their Share menu.
+- **Accessibility** (roles, names, and the states that change a control's action on Windows): [accessibility.md](accessibility.md).
 
 ## Principles
 
