@@ -20,6 +20,7 @@ import { initSafe } from "./safe";
 import { initState } from "./state";
 import { initTheme, initTokens } from "./theme";
 import { onMarimo } from "./engine";
+import { initOutOfStep } from "./outofstep";
 import { watchRedraws } from "./redraw";
 
 function initOnMarimo() {
@@ -34,6 +35,7 @@ function initOnMarimo() {
 
 function init() {
   if (onMarimo()) return initOnMarimo();
+  initOutOfStep();
   initState();
   initTheme();
   initQuote();

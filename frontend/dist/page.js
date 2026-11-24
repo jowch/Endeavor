@@ -3015,6 +3015,41 @@ footer form#feedback { display: none !important; }
     if (onEmber()) syncTheme();
   }
 
+  // src/outofstep.ts
+  var PLUTO_OUT_OF_STEP = "Oopsie!! please refresh your browser and everything will be alright!";
+  var RELOADED_AT = "endeavor-out-of-step-reloaded-at";
+  var RELOAD_GAP_MS = 2e4;
+  function lastReload() {
+    try {
+      return Number(sessionStorage.getItem(RELOADED_AT)) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  function noteReload(at) {
+    try {
+      sessionStorage.setItem(RELOADED_AT, String(at));
+    } catch {
+    }
+  }
+  var reloadDue = false;
+  function reloadOutOfStepPage() {
+    if (reloadDue) return;
+    reloadDue = true;
+    const wait = Math.max(0, lastReload() + RELOAD_GAP_MS - Date.now());
+    setTimeout(() => {
+      noteReload(Date.now());
+      location.reload();
+    }, wait);
+  }
+  function initOutOfStep() {
+    const shown2 = window.alert;
+    window.alert = function(message) {
+      if (message === PLUTO_OUT_OF_STEP) return reloadOutOfStepPage();
+      return shown2.call(window, message);
+    };
+  }
+
   // src/main.ts
   function initOnMarimo() {
     initState();
@@ -3027,6 +3062,7 @@ footer form#feedback { display: none !important; }
   }
   function init() {
     if (onMarimo()) return initOnMarimo();
+    initOutOfStep();
     initState();
     initTheme();
     initQuote();
