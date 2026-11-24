@@ -828,6 +828,7 @@ fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value
         HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
         HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
         HostPane::RStarting(step) => ("r_starting", Some(step)),
+        HostPane::RFailed(reason) if kind == wire::backend::Backend::Marimo => ("python_failed", Some(reason)),
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),

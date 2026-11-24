@@ -349,6 +349,19 @@ pub fn r_installing(error: &str) -> Option<&str> {
     Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
 }
 
+pub fn python_installing(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("python_installing::")?;
+    Some(step.split([',', '(']).next().unwrap_or(step).trim())
+}
+
+pub fn python_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("python_failed::").or_else(|| error.strip_prefix("python_not_found::")).map(str::trim)
+}
+
+pub fn allow_uv_install(bridge: &Bridge) -> Result<(), String> {
+    app_call(bridge, "endeavor/allow_uv_install", json!({})).map(|_| ())
+}
+
 /// The step the pane shows while a notebook is still opening.
 pub const OPENING: &str = "Opening the notebook";
 
@@ -394,7 +407,7 @@ fn until_julia_within<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn
     let mut opening_since = None;
     loop {
         match call() {
-            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| notebook_opening(&e)) {
+            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| python_installing(&e)).or_else(|| notebook_opening(&e)) {
                 Some(doing) => {
                     if notebook_opening(&e).is_some() {
                         if opening_since.get_or_insert_with(std::time::Instant::now).elapsed() >= limit {
@@ -837,6 +850,18 @@ mod tests {
         assert_eq!(until_julia(|| super::answer(answers.borrow_mut().pop().unwrap()), &|_| {}), Ok(json!({ "ran": true })));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
+    }
+
+    #[test]
+    fn until_julia_waits_while_python_notebooks_set_up_and_names_the_step() {
+        let answers = std::cell::RefCell::new(vec![
+            Ok(9),
+            Err("python_installing::Downloading uv 0.11.32 for Python notebooks (4 seconds so far). Make the same call again right away: each call waits up to 30 seconds.".to_owned()),
+            Err("python_installing::Setting up Python notebooks: uv is getting Python and marimo, which can take a few minutes the first time (2 seconds so far).".to_owned()),
+        ]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(9));
+        assert_eq!(*heard.borrow(), ["Setting up Python notebooks: uv is getting Python and marimo", "Downloading uv 0.11.32 for Python notebooks"]);
     }
 
     #[test]
