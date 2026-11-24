@@ -79,6 +79,7 @@ export type ToPage =
       error_asks?: ErrorAsk[];
       waiting_runs?: Array<{ id: string; name?: string | null }>;
       card?: number | null;
+      notebook?: string | null;
     }
   | { type: "action"; name: "present" | "record" | "frontmatter" | "shortcuts" | "feedback" }
   | { type: "debug" };

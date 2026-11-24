@@ -194,6 +194,7 @@ pub enum PaneShows {
     Stopped(Stopped),
     Crashed,
     Opening,
+    PythonPreview,
     Page,
 }
 
@@ -648,7 +649,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
-        let tools = (endeavor && shown).then(|| {
+        let our_tools_in_page = session.kind != Backend::Marimo;
+        let tools = (endeavor && shown && our_tools_in_page).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -711,7 +713,7 @@ impl Workspace {
         let working = session.outbox.busy && !session.agent_waiting;
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
+        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix, "notebook": session.notebook });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -1097,8 +1099,9 @@ impl Workspace {
         eprintln!("New notebook for session {key}");
         self.note_session_kind(&host, key, kind);
         let steps = self.julia_steps(&host, kind, cx);
+        let on = host.clone();
         let task = cx.background_executor().spawn(async move {
-            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
+            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind, &on) {
                 eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
             }
             pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step))
@@ -1257,6 +1260,18 @@ impl Workspace {
                     .child(div().mt(px(6.)).child(page_button("start-notebook", Glyph::Play, "Start", true).on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)))))
                     .into_any_element()
             }
+            PaneShows::PythonPreview => {
+                let notebook = session.notebook.clone();
+                new_session::turtle_pane()
+                    .child(page_title(div().flex().gap(px(6.)).child(mono(file)).child("is in safe preview")))
+                    .child(page_text("A Python notebook shows here once it's allowed to run, since opening it installs the packages it names, and that runs code."))
+                    .child(div().mt(px(6.)).child(page_button("run-notebook", Glyph::Play, "Run notebook", true).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(notebook) = notebook.clone() {
+                            this.run_notebook(notebook, cx);
+                        }
+                    }))))
+                    .into_any_element()
+            }
             PaneShows::Opening => new_session::turtle_pane()
                 .child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…"))
                 .when(self.opening.stuck, |d| {
@@ -1300,6 +1315,9 @@ impl Workspace {
             return PaneShows::Crashed;
         }
         let blank = matches!(crate::webcontent::url(self.webview.read(cx).raw()).as_str(), "about:blank" | "");
+        if session.kind == Backend::Marimo && self.connection(&session.place.host).is_some_and(|c| pluto::waits_to_run(&c.notebooks, session.notebook_path.as_deref().unwrap_or_default())) {
+            return PaneShows::PythonPreview;
+        }
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 

@@ -87,6 +87,12 @@ pub fn is_uuid(s: &str) -> bool {
     s.len() == 36 && s.matches('-').count() == 4 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
+const MARIMO_CELL_ID_MAX: usize = 16;
+
+fn is_cell_id(s: &str) -> bool {
+    is_uuid(s) || ((1..=MARIMO_CELL_ID_MAX).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 pub fn parse(body: &str) -> Option<Message> {
     parse_with(body, page_nonce())
 }
@@ -207,13 +213,13 @@ fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Optio
     let png = || std::sync::Arc::new(Vec::new());
     let part = pick.get("part")?.as_str()?;
     if part == "box" {
-        let cells: Vec<String> = pick.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+        let cells: Vec<String> = pick.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_cell_id(s)).map(str::to_owned)).collect::<Option<_>>()?;
         if cells.len() > MAX_CELLS {
             return None;
         }
         return Some((Quoted::Box { notebook, cells, png: png() }, shot));
     }
-    let cell = pick.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_string();
+    let cell = pick.get("cell")?.as_str().filter(|s| is_cell_id(s))?.to_string();
     let code = capped(pick.get("code"), MAX_CODE);
     let text = || capped(pick.get("text"), MAX_CODE);
     let part = match part {
@@ -353,6 +359,16 @@ mod tests {
         assert_eq!(parse_with(flat, ""), None, "a picture needs an area");
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":"y = 3"}}"#), ""), Some(Message::Code { cell: C1.into(), code: Some("y = 3".into()) }));
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":null}}"#), ""), Some(Message::Code { cell: C1.into(), code: None }));
+    }
+
+    #[test]
+    fn a_marimo_cell_is_picked_by_its_short_id() {
+        let body = format!(r#"{{"type":"quote","notebook":"{NB}","comment":"","picks":[{{"part":"cell","cell":"Hbol","code":"x = 1"}},{{"part":"box","cells":["MJUe","vblA"]}}]}}"#);
+        let Some(Message::Quote(picks)) = parse_with(&body, "") else { panic!("{body}") };
+        assert!(matches!(&picks.quotes[0].0, Quoted::Cell { cell, .. } if cell == "Hbol"));
+        assert!(matches!(&picks.quotes[1].0, Quoted::Box { cells, .. } if cells == &["MJUe", "vblA"]));
+        let too_long = format!(r#"{{"type":"quote","notebook":"{NB}","comment":"","picks":[{{"part":"cell","cell":"{}","code":""}}]}}"#, "a".repeat(17));
+        assert_eq!(parse_with(&too_long, ""), None);
     }
 
     #[test]

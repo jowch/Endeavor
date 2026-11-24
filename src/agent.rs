@@ -477,7 +477,7 @@ const READ_ONLY_TOOLS: [&str; 16] = [
 
 const ASKS_ITSELF: [&str; 1] = ["mcp__notebook__request_restart"];
 
-fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_json::Value {
+fn session_options(personal: bool, plugin_dir: &str, on_server: bool, notebook: serde_json::Value) -> serde_json::Value {
     let sources: &[&str] = if personal { &["user", "project", "local"] } else { &["project", "local"] };
     let disallowed: Vec<&str> = std::iter::once(USERS_ENDEAVOR_SERVER).chain(if on_server { LOCAL_TOOLS.as_slice() } else { &[] }.iter().copied()).collect();
     let allowed: Vec<String> = READ_ONLY_TOOLS.iter().chain(&ASKS_ITSELF).map(|t| t.to_string()).chain(plugin_rules(plugin_dir)).collect();
@@ -489,6 +489,7 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool) -> serde_j
             "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
+            "mcpServers": { crate::celldiff::MCP_SERVER: notebook },
         } }
     })
 }
@@ -523,7 +524,7 @@ pub struct Tools {
 }
 
 impl Tools {
-    fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
+    fn headers(&self, key: u64, agent: Agent) -> Vec<HttpHeader> {
         let mut headers = vec![
             HttpHeader::new("Authorization", format!("Bearer {}", self.bridge.token)),
             HttpHeader::new("X-Endeavor-Session", key.to_string()),
@@ -535,7 +536,16 @@ impl Tools {
         if let Some(server) = &self.server {
             headers.push(HttpHeader::new("X-Endeavor-Host", server.clone()));
         }
-        McpServer::Http(McpServerHttp::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(headers))
+        headers
+    }
+
+    fn mcp_server(&self, key: u64, agent: Agent) -> McpServer {
+        McpServer::Http(McpServerHttp::new(crate::celldiff::MCP_SERVER, self.bridge.url.clone()).headers(self.headers(key, agent)))
+    }
+
+    fn always_loaded_server(&self, key: u64, agent: Agent) -> serde_json::Value {
+        let headers: serde_json::Map<String, serde_json::Value> = self.headers(key, agent).into_iter().map(|h| (h.name, h.value.into())).collect();
+        serde_json::json!({ "type": "http", "url": self.bridge.url, "headers": headers, "alwaysLoad": true })
     }
 }
 
@@ -771,10 +781,11 @@ async fn run(
                 true => Some(crate::install::plugin().map_err(|e| agent_client_protocol::Error::internal_error().data(e))?.display().to_string()),
                 false => None,
             };
-            let options = |tools: &Tools| {
+            let options = |tools: &Tools, key: u64| {
                 let plugin = plugin.as_deref()?;
-                session_options(crate::settings::Settings::load().own_claude_setup(), plugin, tools.server.is_some()).as_object().cloned()
+                session_options(crate::settings::Settings::load().own_claude_setup(), plugin, tools.server.is_some(), tools.always_loaded_server(key, agent)).as_object().cloned()
             };
+            let servers = |tools: &Tools, key: u64| if plugin.is_some() { Vec::new() } else { vec![tools.mcp_server(key, agent)] };
             let _ = events.unbounded_send(AgentEvent::Ready);
 
             let mut pending: FuturesUnordered<LocalBoxFuture<'_, Done>> = FuturesUnordered::new();
@@ -841,7 +852,7 @@ async fn run(
                         match result {
                             Ok(id) => {
                                 let _ = events.unbounded_send(AgentEvent::Forked { key, id: id.clone() });
-                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![tools.mcp_server(key, agent)]).meta(options(&tools));
+                                let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(servers(&tools, key)).meta(options(&tools, key));
                                 let loaded = connection.send_request(request).block_task();
                                 pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                             }
@@ -861,17 +872,17 @@ async fn run(
                 };
                 match command {
                     Command::NewSession { key, cwd, tools } => {
-                        let request = NewSessionRequest::new(cwd).mcp_servers(vec![tools.mcp_server(key, agent)]).meta(options(&tools));
+                        let request = NewSessionRequest::new(cwd).mcp_servers(servers(&tools, key)).meta(options(&tools, key));
                         let started = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, started.await.map(|r| Started::new(r.session_id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::LoadSession { key, id, cwd, tools } => {
-                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(vec![tools.mcp_server(key, agent)]).meta(options(&tools));
+                        let request = LoadSessionRequest::new(id.clone(), cwd).mcp_servers(servers(&tools, key)).meta(options(&tools, key));
                         let loaded = connection.send_request(request).block_task();
                         pending.push(async move { Done::Started(key, loaded.await.map(|r| Started::new(id, r.modes, r.config_options))) }.boxed_local());
                     }
                     Command::ForkSession { key, source, cwd, tools } => {
-                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(vec![tools.mcp_server(key, agent)]).meta(options(&tools));
+                        let request = ForkSessionRequest::new(source, cwd.clone()).mcp_servers(servers(&tools, key)).meta(options(&tools, key));
                         let forked = connection.send_request(request).block_task();
                         pending.push(async move { Done::Forked(key, cwd, tools, forked.await.map(|r| r.session_id)) }.boxed_local());
                     }
@@ -1250,13 +1261,13 @@ mod tests {
 
     #[test]
     fn the_users_own_setup_can_be_left_out_and_the_app_plugin_always_loads() {
-        let off = &session_options(false, "/p", false)["claudeCode"]["options"];
+        let off = &session_options(false, "/p", false, serde_json::Value::Null)["claudeCode"]["options"];
         assert_eq!(off["settingSources"], serde_json::json!(["project", "local"]));
         assert_eq!(off["strictMcpConfig"], true);
         assert_eq!(off["plugins"][0]["path"], "/p");
         assert_eq!(off["disallowedTools"], serde_json::json!(["mcp__endeavor"]));
 
-        let own = &session_options(true, "/p", false)["claudeCode"]["options"];
+        let own = &session_options(true, "/p", false, serde_json::Value::Null)["claudeCode"]["options"];
         assert_eq!(own["settingSources"], serde_json::json!(["user", "project", "local"]));
         assert_eq!(own["strictMcpConfig"], false);
         assert_eq!(own["plugins"][0]["path"], "/p");
@@ -1266,7 +1277,7 @@ mod tests {
     fn the_users_own_endeavor_plugin_is_off_in_every_session() {
         for own in [false, true] {
             for on_server in [false, true] {
-                let settings = &session_options(own, "/p", on_server)["claudeCode"]["options"]["settings"];
+                let settings = &session_options(own, "/p", on_server, serde_json::Value::Null)["claudeCode"]["options"]["settings"];
                 assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
             }
         }
@@ -1274,7 +1285,7 @@ mod tests {
         let codex: serde_json::Value = serde_json::from_str(codex).unwrap();
         assert_eq!(codex, serde_json::json!({ "plugins": { super::USERS_ENDEAVOR_PLUGIN: { "enabled": false } } }));
         for on_server in [false, true] {
-            let off = &session_options(true, "/p", on_server)["claudeCode"]["options"]["disallowedTools"];
+            let off = &session_options(true, "/p", on_server, serde_json::Value::Null)["claudeCode"]["options"]["disallowedTools"];
             assert_eq!(off[0], "mcp__endeavor");
         }
     }
@@ -1292,7 +1303,7 @@ mod tests {
 
     #[test]
     fn the_plugins_own_files_are_read_without_asking() {
-        let allowed = |dir: &str| session_options(false, dir, false)["claudeCode"]["options"]["allowedTools"].clone();
+        let allowed = |dir: &str| session_options(false, dir, false, serde_json::Value::Null)["claudeCode"]["options"]["allowedTools"].clone();
         let rule = |dir: &str| allowed(dir).as_array().unwrap().iter().filter_map(|t| t.as_str()).find(|t| t.starts_with("Read(")).map(str::to_owned);
         assert_eq!(rule("/Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin").as_deref(), Some("Read(//Users/me/Library/Application Support/endeavor/plugin/0.1.0/plugin/**)"));
         assert_eq!(rule(r"C:\Users\me\AppData\Local\Endeavor\plugin\0.1.0\plugin").as_deref(), Some("Read(//c/Users/me/AppData/Local/Endeavor/plugin/0.1.0/plugin/**)"));
@@ -1329,7 +1340,7 @@ mod tests {
             "close_notebook", "apply_package_update", "approve_install", "answer_prompt", "set_input", "run_shell",
         ];
         for mode in [false, true] {
-            let allowed = session_options(false, "/p", mode)["claudeCode"]["options"]["allowedTools"].clone();
+            let allowed = session_options(false, "/p", mode, serde_json::Value::Null)["claudeCode"]["options"]["allowedTools"].clone();
             let allowed: Vec<String> = serde_json::from_value::<Vec<String>>(allowed).unwrap().into_iter().filter(|t| t.starts_with("mcp__")).collect();
             for tool in &tools {
                 let full = format!("mcp__notebook__{tool}");
@@ -1343,7 +1354,7 @@ mod tests {
 
     #[test]
     fn server_sessions_lose_local_file_tools_and_gain_the_host_header() {
-        let off = &session_options(false, "/p", true)["claudeCode"]["options"]["disallowedTools"];
+        let off = &session_options(false, "/p", true, serde_json::Value::Null)["claudeCode"]["options"]["disallowedTools"];
         for tool in ["Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "NotebookEdit"] {
             assert!(off.as_array().unwrap().iter().any(|t| t == tool), "{tool} still on");
         }
@@ -1357,5 +1368,19 @@ mod tests {
         let super::McpServer::Http(http) = (super::Tools { bridge, server: None }).mcp_server(7, super::Agent::Claude) else { panic!() };
         assert!(http.headers.iter().any(|h| h.name == "X-Endeavor-Skills" && h.value == "plugin"), "Claude Code has the skills");
         assert!(http.headers.iter().any(|h| h.name == "X-Endeavor-Client" && h.value == "app"), "the runtime answers it as the app's");
+    }
+
+    #[test]
+    fn claude_code_never_hides_the_notebook_tools_behind_tool_search() {
+        let bridge = crate::pluto::Bridge { url: "http://127.0.0.1:9/mcp".into(), token: "t".into(), page_token: "t".into() };
+        let server = (super::Tools { bridge, server: Some("lab".into()) }).always_loaded_server(7, super::Agent::Claude);
+        let options = &session_options(false, "/p", true, server)["claudeCode"]["options"];
+        let notebook = &options["mcpServers"][crate::celldiff::MCP_SERVER];
+        assert_eq!(notebook["alwaysLoad"], true);
+        assert_eq!((notebook["type"].as_str(), notebook["url"].as_str()), (Some("http"), Some("http://127.0.0.1:9/mcp")));
+        assert_eq!(notebook["headers"]["Authorization"], "Bearer t");
+        assert_eq!(notebook["headers"]["X-Endeavor-Session"], "7");
+        assert_eq!(notebook["headers"]["X-Endeavor-Host"], "lab");
+        assert_eq!(notebook["headers"]["X-Endeavor-Skills"], "plugin");
     }
 }

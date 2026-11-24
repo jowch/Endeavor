@@ -91,7 +91,8 @@ Click **Settings** next to it to choose:
 A change takes effect when notebooks restart: **Restart** appears under the
 choice while notebooks run. Servers and clusters set their own R. R notebooks
 don't run on Windows yet, so there the row says **Not available yet**, as
-Python's does everywhere.
+Python's does on Windows. On a Mac or Linux computer the Python row says Python
+notebooks run on marimo, with uv getting Python and each notebook's packages.
 
 ## Where notebooks run
 
