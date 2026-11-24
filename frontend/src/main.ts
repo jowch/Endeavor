@@ -31,9 +31,11 @@ function initOnMarimo() {
   initQuote();
   initAskBox();
   initAnnotate();
+  initRail();
   initDismissResumedBanner();
   initMarimoDocs();
   initDebug();
+  watchRedraws();
   send({ type: "ready" });
 }
 
