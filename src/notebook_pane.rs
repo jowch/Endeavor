@@ -186,6 +186,21 @@ impl NotebookAction {
     }
 }
 
+pub const OUT_OF_STEP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Debug, PartialEq)]
+pub enum OutOfStepAnswer {
+    Reload,
+    Notice,
+}
+
+pub fn out_of_step_answer(last_reload: Option<std::time::Instant>, now: std::time::Instant) -> OutOfStepAnswer {
+    match last_reload {
+        Some(last) if now.saturating_duration_since(last) < OUT_OF_STEP_WINDOW => OutOfStepAnswer::Notice,
+        _ => OutOfStepAnswer::Reload,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaneShows {
     Host(HostPane),
@@ -194,6 +209,7 @@ pub enum PaneShows {
     Stopped(Stopped),
     Crashed,
     Opening,
+    PythonPreview,
     Page,
 }
 
@@ -325,11 +341,17 @@ fn ember_logo() -> impl IntoElement {
     div().relative().size(px(10.)).flex_shrink_0().children([dot(7., 0., 3.), dot(2.5, 6.5, 1.), dot(1.5, 8.5, 0.)])
 }
 
+fn marimo_logo() -> impl IntoElement {
+    let marimo = rgb(if crate::theme::is_light() { 0x1c7361 } else { 0x3fa58c });
+    let ring = |size: f32, left: f32, top: f32| div().absolute().left(px(left)).top(px(top)).size(px(size)).rounded_full().border(px(1.)).border_color(marimo);
+    div().relative().size(px(10.)).flex_shrink_0().children([ring(10., 0., 0.), ring(8.5, 0.5, 1.)])
+}
+
 fn engine_logo(kind: Backend) -> AnyElement {
     match kind {
         Backend::Pluto => pluto_logo().into_any_element(),
         Backend::Ember => ember_logo().into_any_element(),
-        Backend::Marimo => div().into_any_element(),
+        Backend::Marimo => marimo_logo().into_any_element(),
     }
 }
 
@@ -648,7 +670,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
-        let tools = (endeavor && shown).then(|| {
+        let our_tools_in_page = session.kind != Backend::Marimo;
+        let tools = (endeavor && shown && our_tools_in_page).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             [
                 header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -711,7 +734,7 @@ impl Workspace {
         let working = session.outbox.busy && !session.agent_waiting;
         let error_asks: Vec<_> = session.error_asks().into_iter().map(|(cell, kind, queued)| serde_json::json!({ "cell": cell, "kind": kind, "queued": queued })).collect();
         let waiting: Vec<serde_json::Value> = crate::approval::waiting_run_cells(session).into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
-        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix });
+        let msg = serde_json::json!({ "type": "context", "host": host, "agent": session.agent.name(), "asking": session.asking_to_run(), "readonly": self.read_only(session), "crash": crash, "ask_cells": ask_cells, "rerun_cells": rerun_cells, "needed_ids": needed_ids, "working": working, "error_asks": error_asks, "waiting_runs": waiting, "card": card_ix, "notebook": session.notebook });
         let text = msg.to_string();
         if text != self.page_context {
             self.page_context = text;
@@ -1097,8 +1120,9 @@ impl Workspace {
         eprintln!("New notebook for session {key}");
         self.note_session_kind(&host, key, kind);
         let steps = self.julia_steps(&host, kind, cx);
+        let on = host.clone();
         let task = cx.background_executor().spawn(async move {
-            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
+            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind, &on) {
                 eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
             }
             pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step))
@@ -1257,6 +1281,18 @@ impl Workspace {
                     .child(div().mt(px(6.)).child(page_button("start-notebook", Glyph::Play, "Start", true).on_click(cx.listener(move |this, _, _, cx| this.start_notebook(key, cx)))))
                     .into_any_element()
             }
+            PaneShows::PythonPreview => {
+                let notebook = session.notebook.clone();
+                new_session::turtle_pane()
+                    .child(page_title(div().flex().gap(px(6.)).child(mono(file)).child("is in safe preview")))
+                    .child(page_text("A Python notebook shows here once it's allowed to run, since opening it installs the packages it names, and that runs code."))
+                    .child(div().mt(px(6.)).child(page_button("run-notebook", Glyph::Play, "Run notebook", true).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(notebook) = notebook.clone() {
+                            this.run_notebook(notebook, cx);
+                        }
+                    }))))
+                    .into_any_element()
+            }
             PaneShows::Opening => new_session::turtle_pane()
                 .child(div().flex().items_baseline().text_color(theme::text_muted()).child("Opening ").child(new_session::file_name(file)).child("…"))
                 .when(self.opening.stuck, |d| {
@@ -1300,6 +1336,9 @@ impl Workspace {
             return PaneShows::Crashed;
         }
         let blank = matches!(crate::webcontent::url(self.webview.read(cx).raw()).as_str(), "about:blank" | "");
+        if session.kind == Backend::Marimo && self.connection(&session.place.host).is_some_and(|c| pluto::waits_to_run(&c.notebooks, session.notebook_path.as_deref().unwrap_or_default())) {
+            return PaneShows::PythonPreview;
+        }
         if session.notebook.is_some() && !blank { PaneShows::Page } else { PaneShows::Opening }
     }
 
@@ -1329,6 +1368,28 @@ impl Workspace {
         let Some(path) = session.notebook_path.as_deref() else { return false };
         let Some(list) = self.connection(&session.place.host).and_then(|c| c.notebooks.as_array()) else { return false };
         list.iter().any(|nb| nb["path"] == path)
+    }
+
+    pub(crate) fn on_out_of_step(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.active else { return };
+        let Some(session) = self.sessions.iter().find(|s| s.key == key) else { return };
+        if !matches!(self.pane_shows(session, cx), PaneShows::Page) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        match out_of_step_answer(session.out_of_step_reload, now) {
+            OutOfStepAnswer::Reload => {
+                if let Some(session) = self.session_mut(key) {
+                    session.out_of_step_reload = Some(now);
+                }
+                eprintln!("Notebook page out of step with the server: loading it again");
+                self.reload_notebook(key, cx);
+            }
+            OutOfStepAnswer::Notice => {
+                eprintln!("Notebook page out of step again within {OUT_OF_STEP_WINDOW:?}: not loading it again by itself");
+                self.show_notice(Notice::new(Spot::Pane, "The notebook page lost its place", "It lost its place again. Load it again, or restart the notebook if it keeps happening.", Some(Retry::ReloadNotebook(key))), cx);
+            }
+        }
     }
 
     pub fn reload_notebook(&mut self, key: u64, cx: &mut Context<Self>) {
@@ -1495,6 +1556,16 @@ mod tests {
     use super::{OPENING_GRACE, OpeningStep, OpeningWatch};
     use wire::backend::Backend;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn an_out_of_step_page_reloads_once_a_minute_then_asks_the_user() {
+        use super::{OUT_OF_STEP_WINDOW, OutOfStepAnswer, out_of_step_answer};
+        let now = Instant::now() + Duration::from_secs(3600);
+        assert_eq!(out_of_step_answer(None, now), OutOfStepAnswer::Reload);
+        assert_eq!(out_of_step_answer(Some(now - Duration::from_secs(5)), now), OutOfStepAnswer::Notice);
+        assert_eq!(out_of_step_answer(Some(now - OUT_OF_STEP_WINDOW + Duration::from_millis(1)), now), OutOfStepAnswer::Notice);
+        assert_eq!(out_of_step_answer(Some(now - OUT_OF_STEP_WINDOW), now), OutOfStepAnswer::Reload);
+    }
 
     #[test]
     fn a_stuck_opening_reloads_once_then_offers_the_button() {

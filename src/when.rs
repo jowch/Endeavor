@@ -1,8 +1,5 @@
-//! Times as the new-session screen shows them ("2 h ago", "yesterday", "Aug 12").
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// An ISO 8601 timestamp (`2026-09-26T14:03:11.123Z`, or with a `+02:00` offset).
 pub fn parse_iso8601(text: &str) -> Option<SystemTime> {
     let (date, time) = text.split_once('T')?;
     let mut ymd = date.splitn(3, '-').map(|p| p.parse::<i64>().ok());
@@ -27,7 +24,6 @@ pub fn parse_iso8601(text: &str) -> Option<SystemTime> {
     Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
 }
 
-/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -49,12 +45,10 @@ fn civil_from_days(z: i64) -> (i64, i64) {
     (m, d)
 }
 
-/// How long ago `then` was, in a few words, with days in local time.
 pub fn ago(then: SystemTime) -> String {
     ago_at(then, SystemTime::now(), local_offset())
 }
 
-/// The local time zone's offset from UTC, in seconds.
 #[cfg(unix)]
 fn local_offset() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
@@ -67,8 +61,6 @@ fn local_offset() -> i64 {
     chrono::Local::now().offset().local_minus_utc().into()
 }
 
-/// A moment (Unix seconds) as a local clock time, "18:40", with the weekday
-/// ("Sat 09:10") when it isn't today.
 pub fn clock(at: u64) -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     clock_at(at, now, local_offset())
@@ -85,8 +77,6 @@ fn clock_at(at: u64, now: u64, offset: i64) -> String {
     format!("{} {h}:{m:02}", WEEKDAYS[day.rem_euclid(7) as usize])
 }
 
-/// A moment as a day and clock time, in local time: "today at 9:14",
-/// "yesterday at 16:40", "Monday at 11:02" within the week, else "Aug 12 at 9:14".
 pub fn day_at(then: SystemTime) -> String {
     day_at_with(then, SystemTime::now(), local_offset())
 }
@@ -179,7 +169,6 @@ mod tests {
         assert_eq!(ago(at("2026-09-22T09:00:00Z")), "4 days ago");
         assert_eq!(ago(at("2026-09-17T09:00:00Z")), "last week");
         assert_eq!(ago(at("2026-08-12T09:00:00Z")), "Aug 12");
-        // 00:30 in UTC+2 is already the next day there.
         assert_eq!(ago_at(at("2026-09-25T20:00:00Z"), at("2026-09-25T22:30:00Z"), 7200), "yesterday");
         assert_eq!(ago_at(at("2026-09-25T20:00:00Z"), at("2026-09-25T22:30:00Z"), 0), "2 h ago");
     }
