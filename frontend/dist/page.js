@@ -3118,6 +3118,48 @@ footer form#feedback { display: none !important; }
     follow2();
   }
 
+  // src/marimopackages.ts
+  var canonical = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
+  function pythonLine(requirement) {
+    const lowest = requirement?.match(/^\s*>=\s*([\d.]+)\s*$/);
+    if (lowest) return `Python ${lowest[1]} or later`;
+    return requirement ? `Python ${requirement.trim()}` : "Python";
+  }
+  function lastLogLine(log) {
+    const lines = log.split("\n").map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean);
+    const telling = lines.filter((l) => /error|not found|no solution|because/i.test(l));
+    return telling[telling.length - 1] ?? lines[lines.length - 1] ?? "";
+  }
+  function fromMarimo(raw) {
+    const named = (list) => new Set((list ?? []).map(canonical));
+    const failed = named(raw.failed?.packages);
+    const installing = named(raw.install?.step === "installing" ? raw.install.packages : []);
+    const asking = named(raw.install?.step === "asking" ? raw.install.packages : []);
+    const why = raw.failed ? lastLogLine(raw.failed.log) : "";
+    const state2 = (name) => failed.has(name) ? "failed" : installing.has(name) ? "installing" : asking.has(name) ? "waiting" : "ready";
+    const listed = new Set(raw.packages.map((p) => canonical(p.name)));
+    const added = [...raw.failed?.packages ?? [], ...raw.install?.packages ?? []].filter((n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i);
+    const packages = [...raw.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
+      const s = state2(canonical(p.name));
+      return s === "failed" ? { ...p, state: s, why } : { ...p, state: s };
+    });
+    return {
+      runtime: pythonLine(raw.python),
+      source: raw.package_date ? `PyPI as of ${raw.package_date}` : null,
+      packages,
+      dependencies: null,
+      install: installing.size ? { done: 0, total: installing.size } : null,
+      failure: raw.failed ? { name: raw.failed.packages.join(", "), why, cells: [], log: raw.failed.log } : null,
+      restart: null
+    };
+  }
+  var latest = null;
+  function initMarimoPackages() {
+    on("packages", (msg) => {
+      latest = fromMarimo(msg.environment);
+    });
+  }
+
   // src/main.ts
   function initOnMarimo() {
     initState();
@@ -3127,6 +3169,7 @@ footer form#feedback { display: none !important; }
     initAnnotate();
     initDismissResumedBanner();
     initMarimoDocs();
+    initMarimoPackages();
     initDebug();
     send({ type: "ready" });
   }

@@ -255,6 +255,46 @@ pub enum PaneShows {
 
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
 
+const PACKAGES_SETTLED: Duration = Duration::from_secs(5);
+const PACKAGES_INSTALLING: Duration = Duration::from_secs(1);
+const PACKAGES_RETRY: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+pub struct PackagesFeed {
+    sent: Option<(u64, serde_json::Value)>,
+    asking: bool,
+    next: Option<Instant>,
+}
+
+impl PackagesFeed {
+    pub fn page_reloaded(&mut self) {
+        self.sent = None;
+        self.next = None;
+    }
+
+    pub fn sent_for(&self, key: u64) -> Option<&serde_json::Value> {
+        self.sent.as_ref().filter(|(k, _)| *k == key).map(|(_, env)| env)
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        !self.asking && self.next.is_none_or(|at| now >= at)
+    }
+
+    fn arrived(&mut self, key: u64, got: Result<serde_json::Value, String>, now: Instant) -> Option<serde_json::Value> {
+        self.asking = false;
+        let Ok(env) = got else {
+            self.next = Some(now + PACKAGES_RETRY);
+            return None;
+        };
+        self.next = Some(now + if env["install"].is_null() { PACKAGES_SETTLED } else { PACKAGES_INSTALLING });
+        if self.sent_for(key) == Some(&env) {
+            return None;
+        }
+        self.sent = Some((key, env.clone()));
+        Some(env)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct OpeningWatch {
     since: Option<(u64, Instant)>,
@@ -962,6 +1002,30 @@ impl Workspace {
         if matches!(action, NotebookAction::Shortcuts | NotebookAction::Feedback | NotebookAction::Frontmatter) {
             let _ = self.webview.read(cx).raw().focus();
         }
+    }
+
+    pub(crate) fn feed_packages(&mut self, now: Instant, cx: &mut Context<Self>) {
+        if !self.packages_feed.due(now) {
+            return;
+        }
+        let Some(session) = self.active_session().filter(|s| s.kind == Backend::Marimo) else { return };
+        let (key, Some(id)) = (session.key, session.notebook.clone()) else { return };
+        let Some(runtime) = self.connection(&session.place.host).and_then(|c| c.runtime.as_ref()).filter(|r| r.version.reads_python_packages()) else { return };
+        let bridge = runtime.bridge.clone();
+        self.packages_feed.asking = true;
+        cx.spawn(async move |this, cx| {
+            let got = cx.background_executor().spawn(async move { pluto::environment(&bridge, &id) }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.active != Some(key) {
+                    this.packages_feed.asking = false;
+                    return;
+                }
+                if let Some(env) = this.packages_feed.arrived(key, got, Instant::now()) {
+                    this.send_to_page(&serde_json::json!({ "type": "packages", "environment": env }), cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn export(&mut self, key: u64, kind: &'static str, extension: &'static str, cx: &mut Context<Self>) {
@@ -1695,6 +1759,30 @@ mod tests {
         assert_eq!(export_from(Backend::Marimo, "notebookexport", "n1"), ExportFrom::Runtime("html"));
         assert_eq!(export_from(Backend::Marimo, "notebookfile", "n1"), ExportFrom::Runtime("file"));
         assert_eq!(Backend::ALL.map(notebook_extension), ["jl", "R", "py"]);
+    }
+
+    #[test]
+    fn a_python_notebooks_packages_go_to_the_page_only_when_they_change_and_more_often_while_installing() {
+        use super::{PACKAGES_INSTALLING, PACKAGES_RETRY, PACKAGES_SETTLED, PackagesFeed};
+        let now = Instant::now();
+        let ready = serde_json::json!({ "packages": [{ "name": "boto3", "version": "1.43.108" }], "install": null, "failed": null });
+        let installing = serde_json::json!({ "packages": [], "install": { "step": "installing", "packages": ["boto3"] }, "failed": null });
+        let mut feed = PackagesFeed::default();
+        assert!(feed.due(now));
+        feed.asking = true;
+        assert!(!feed.due(now), "one call at a time");
+        assert_eq!(feed.arrived(7, Ok(installing.clone()), now), Some(installing.clone()));
+        assert!(!feed.due(now) && feed.due(now + PACKAGES_INSTALLING));
+        assert_eq!(feed.arrived(7, Ok(installing.clone()), now), None, "nothing new");
+        assert_eq!(feed.arrived(7, Ok(ready.clone()), now), Some(ready.clone()));
+        assert!(!feed.due(now + PACKAGES_INSTALLING) && feed.due(now + PACKAGES_SETTLED));
+        assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready.clone()), "another notebook gets its own");
+        assert_eq!(feed.sent_for(7), None);
+        assert_eq!(feed.arrived(8, Err("lost".into()), now), None);
+        assert!(!feed.due(now + PACKAGES_SETTLED) && feed.due(now + PACKAGES_RETRY));
+        feed.page_reloaded();
+        assert!(feed.due(now));
+        assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready), "a reloaded page is sent them again");
     }
 
     #[test]
