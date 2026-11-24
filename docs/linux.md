@@ -260,7 +260,15 @@ changes.
    through XWayland. Without that, GPUI saw `WAYLAND_DISPLAY`, chose Wayland
    and panicked. `platform::opener` puts the display back for `xdg-open`
    (sign-in, links, Show in Files): a browser already running on Wayland,
-   such as Ubuntu's Firefox, otherwise never gets the link. Links that GPUI
+   such as Ubuntu's Firefox, otherwise never gets the link. The agent and the
+   runtime helper get the display back too (#162). The agent gets it as a
+   leading `WAYLAND_DISPLAY=` argument, which the ACP crate applies as its
+   environment. The helper, the app binary run with `--helper`, sets it back
+   first thing in `main`, and opens no window. So the programs that the agent,
+   Julia or R start see the Wayland desktop, as they would from the user's
+   terminal. A plot window from a toolkit that prefers Wayland may now open
+   natively instead of through XWayland. That hasn't been tried on a real
+   Wayland desktop. Links that GPUI
    or gpui-component open themselves don't go through it. On Ubuntu 26.04's
    GNOME (Wayland) the app starts and reaches sign-in; nothing past that was
    tried there. Native Wayland needs a

@@ -2705,6 +2705,9 @@ fn main() {
             std::env::set_var(platform::WAYLAND_DISPLAY_KEPT, display);
             std::env::remove_var("WAYLAND_DISPLAY");
         }
+    } else if let Some(display) = std::env::var_os(platform::WAYLAND_DISPLAY_KEPT).filter(|_| std::env::args().nth(1).as_deref() == Some(runtime::HELPER_FLAG)) {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("WAYLAND_DISPLAY", display) };
     }
     signin::browser_shim();
     #[cfg(windows)]
