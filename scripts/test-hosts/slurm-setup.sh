@@ -1,19 +1,4 @@
 #!/usr/bin/env bash
-# Turn an OrbStack Linux machine into a one-node Slurm test cluster.
-# Run from macOS. Safe to re-run: every step checks or overwrites to the same end state.
-#
-#   scripts/test-hosts/slurm-setup.sh [machine] [user]
-#
-# Result: munge, mariadb, slurmdbd, slurmctld and slurmd running under systemd,
-# partitions `shared` (default, 8h) and `short` (1h), sacct backed by slurmdbd,
-# and passwordless `ssh <node>` from the machine to itself for the user.
-#
-# OrbStack notes:
-# - The machine runs systemd, so daemons are ordinary enabled systemd services.
-# - cgroup v2 is delegated into the machine, so proctrack/cgroup and task/cgroup work:
-#   jobs get their own cgroup with memory and core limits enforced.
-# - OrbStack's own `ssh <machine>` sessions are pinned to one CPU fewer than the machine
-#   has (nproc shows 9 of 10); slurmd is not, and the node declares all CPUs.
 set -euo pipefail
 
 MACHINE="${1:-endeavor-linux}"
@@ -21,7 +6,6 @@ USER_NAME="${2:-$(ssh "$MACHINE" id -un)}"
 
 as_root() { orbctl run -m "$MACHINE" -u root bash -c "$1"; }
 
-# The remote script is a heredoc inside $(...): bash fails to parse it if it holds an unpaired apostrophe, even in a comment.
 as_root "$(cat <<EOF
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -32,14 +16,12 @@ NODE="$(hostname -s)"
 CLUSTER=endeavor
 DB_PASS=slurmdbtest
 
-# --- packages --------------------------------------------------------------
 PKGS="slurm-wlm slurmdbd munge mariadb-server openssh-server"
 if ! dpkg -s $PKGS >/dev/null 2>&1; then
   apt-get update -q
   apt-get install -y -q $PKGS
 fi
 
-# --- munge -------------------------------------------------------------------
 if [ ! -s /etc/munge/munge.key ]; then
   mungekey --create --keyfile /etc/munge/munge.key
 fi
@@ -47,7 +29,6 @@ chown munge:munge /etc/munge/munge.key
 chmod 400 /etc/munge/munge.key
 systemctl enable --now munge
 
-# --- mariadb + slurmdbd --------------------------------------------------------
 systemctl enable --now mariadb
 mariadb -e "CREATE DATABASE IF NOT EXISTS slurm_acct_db;
 CREATE USER IF NOT EXISTS 'slurm'@'localhost' IDENTIFIED BY '$DB_PASS';
@@ -79,8 +60,6 @@ for _ in $(seq 30); do
   sleep 1
 done
 
-# --- slurm.conf ------------------------------------------------------------------
-# Hardware line from slurmd -C, with 512 MB of RealMemory held back for the OS.
 HW="$(slurmd -C | head -1)"
 MEM="$(sed -n 's/.*RealMemory=\([0-9]*\).*/\1/p' <<<"$HW")"
 MEM=$((MEM - 512))
@@ -103,7 +82,6 @@ ReturnToService=2
 SchedulerType=sched/backfill
 SelectType=select/cons_tres
 SelectTypeParameters=CR_Core_Memory
-# Without a default, a job that omits --mem is given all memory on the node and nothing else fits.
 DefMemPerCPU=$((MEM / CPUS))
 ProctrackType=proctrack/cgroup
 TaskPlugin=task/cgroup,task/affinity
@@ -123,7 +101,6 @@ PartitionName=shared Nodes=$NODE Default=YES MaxTime=8:00:00 DefaultTime=1:00:00
 PartitionName=short Nodes=$NODE MaxTime=1:00:00 DefaultTime=0:10:00 State=UP OverSubscribe=NO
 CONF
 
-# Swap is constrained too: the machine has swap, so a RAM limit alone lets jobs swap instead of hitting OOM.
 cat > /etc/slurm/cgroup.conf.new <<CONF
 CgroupPlugin=cgroup/v2
 ConstrainCores=yes
@@ -149,13 +126,11 @@ if [ "$CHANGED" = 1 ] || ! systemctl is-active -q slurmctld || ! systemctl is-ac
   systemctl restart slurmctld slurmd
 fi
 for _ in $(seq 30); do scontrol ping >/dev/null 2>&1 && break; sleep 1; done
-# Bring the node back if an earlier run left it down or drained.
 sleep 2
 if sinfo -h -N -o '%t' | grep -qE 'down|drain'; then
   scontrol update NodeName="$NODE" State=RESUME || true
 fi
 
-# --- ssh from the machine to itself ------------------------------------------------------
 systemctl enable --now ssh
 HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 runuser -u "$USER_NAME" -- bash -s "$NODE" <<'USERSH'

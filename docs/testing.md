@@ -463,3 +463,22 @@ These are read by debug builds only.
 - `ENDEAVOR_TEST_NO_STEERING`: a file path. While the file exists, ⌘⏎ during
   a turn takes the path for an agent that can't steer: the turn stops, and the
   message goes next, marked "Stopped Claude's work to send this".
+
+## A Slurm test cluster
+
+`scripts/test-hosts/slurm-setup.sh [machine] [user]`, run from macOS, turns
+an OrbStack Linux machine into a one-node Slurm cluster for checking
+clusters: munge, mariadb, slurmdbd, slurmctld and slurmd under systemd,
+partitions `shared` (the default, 8 h) and `short` (1 h), `sacct` backed by
+slurmdbd, and passwordless `ssh <node>` from the machine to itself. It is
+safe to run again; each step checks or overwrites to the same end state.
+
+- The machine runs systemd and delegates cgroup v2, so jobs get their own
+  cgroup with memory and core limits enforced. Swap is limited too, since
+  with a RAM limit alone jobs swap instead of hitting OOM.
+- The node declares all of the machine's CPUs (from `slurmd -C`, with
+  512 MB of memory held back for the OS). OrbStack's own `ssh <machine>`
+  sessions are pinned to one CPU fewer, but slurmd isn't.
+- Jobs get a default memory size: without one, a job that omits `--mem` is
+  given all of the node's memory and nothing else fits.
+- A node an earlier run left down or drained is brought back.

@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn only_this_computers_sessions_say_they_show_python() {
         let here = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::ThisMac);
-        assert_eq!(here["shows_python"], crate::new_session::SHOWS_PYTHON);
+        assert_eq!(here["shows_python"], true);
         assert_eq!((here["owner"].as_str(), here["kind"].as_str()), (Some("7"), Some("python")));
         let server = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::Server("lab".into()));
         assert_eq!(server["shows_python"], false);

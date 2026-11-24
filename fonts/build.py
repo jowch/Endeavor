@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Build Endeavor Sans and fetch JuliaMono into this directory.
-
-Endeavor Sans = Schibsted Grotesk (Latin, figures, kerning, metrics)
-              + Greek from Inter (opsz 14 instance), with ν from Arimo
-              + mark-to-base anchors so combining accents sit over any letter
-              + ⁺ ⁻ ⁿ generated to match Schibsted's own ¹²³
-              + ∇ ∈ ∉ ∝ from Noto Sans Math, emboldened to Schibsted's stroke weight; ℏ = Schibsted's ħ
-
-Usage: python3 fonts/build.py [--gap 0.03]
-"""
 import argparse
 import copy
 import io
@@ -51,18 +41,19 @@ KEEP_FROM_BASE = {0x00B5}
 NU = 0x03BD
 SUPERIOR_DIGITS = [0x2070, 0x00B9, 0x00B2, 0x00B3] + list(range(0x2074, 0x207A))
 TOP_FRACTION = 0.20
-ANCHOR_CLAMP = 0.15  # max shift of a top/bottom-part centre from the bbox centre, as a fraction of advance
-FLOATING_ANCHOR = 0.20  # designed top anchors this far (em) above the glyph's yMax are replaced
+ANCHOR_CLAMP = 0.15
+FLOATING_ANCHOR = 0.20
+UNICODE_RANGE_GREEK_AND_COPTIC = 1 << 7
+CODE_PAGE_1253_GREEK = 1 << 3
+PROPORTIONAL_TO = 0x221D
 
 
-# ---------- sources ----------
 
 def slug(name):
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 def fetch_family(family):
-    """Google Fonts download manifest for a family, cached in .cache/<slug>/."""
     d = CACHE / slug(family)
     d.mkdir(parents=True, exist_ok=True)
     mpath = d / "manifest.json"
@@ -115,7 +106,6 @@ def fetch_juliamono():
     return TTFont(HERE / "JuliaMono-Regular.ttf")["name"].getDebugName(5).split(";")[0]
 
 
-# ---------- measuring ----------
 
 def cp_glyph(font, cp):
     return font.getBestCmap()[cp if isinstance(cp, int) else ord(cp)]
@@ -129,7 +119,6 @@ def glyph_bounds(font, g):
 
 
 def ink(font, g, y=None, x=None, step=2):
-    """Total ink length along a horizontal line at y, or a vertical line at x."""
     gs = font.getGlyphSet()
     b = glyph_bounds(font, g)
     total = 0
@@ -149,13 +138,11 @@ def stem_at_mid(font, g, parts=1):
 
 
 def plus_bar(font):
-    """Thickness of the horizontal arm of '+', measured left of the vertical stem."""
     g = cp_glyph(font, "+")
     b = glyph_bounds(font, g)
     return ink(font, g, x=b[0] + (b[2] - b[0]) * 0.15)
 
 
-# ---------- glyph building ----------
 
 def record(font, g):
     rec = DecomposingRecordingPen(font.getGlyphSet())
@@ -164,7 +151,6 @@ def record(font, g):
 
 
 def to_glyph(rec, transform=(1, 0, 0, 1, 0, 0), embolden=0.0):
-    """Outline → TrueType glyph, optionally emboldened by `embolden` units of stroke thickness."""
     if not embolden:
         pen = TTGlyphPen(None)
         rec.replay(TransformPen(pen, transform))
@@ -227,7 +213,6 @@ def rect(pen, x0, y0, x1, y1):
     pen.closePath()
 
 
-# ---------- recipe steps ----------
 
 def x_height(font):
     return glyph_bounds(font, cp_glyph(font, "x"))[3]
@@ -254,8 +239,6 @@ def import_greek(base, weight, log):
 
 
 def import_nu(base, weight, greek, greek_scale, log):
-    """ν from Arimo (Inter's reads as Latin v). Arimo is instanced at the weight whose ι stem, after
-    x-height scaling, matches Inter's ι stem; ν is spaced with Schibsted's v sidebearings."""
     target = stem_at_mid(greek, cp_glyph(greek, 0x03B9)) * greek_scale
 
     def attempt(wght):
@@ -291,7 +274,6 @@ def superior_scale(font):
 
 
 def superior_signs(base):
-    """⁺ ⁻ as square-ended bars: + and − proportions at the ¹²³ size, bar/stem ratio of the lining −/1."""
     s, _ = superior_scale(base)
     one = cp_glyph(base, 0x00B9)
     ob = glyph_bounds(base, one)
@@ -313,8 +295,6 @@ def superior_signs(base):
 
 
 def superior_n(base, log):
-    """ⁿ = Schibsted's n at the ¹²³ scale, from the variable font instanced at the weight whose
-    scaled n stem equals the ¹ stem."""
     s, baseline = superior_scale(base)
     target = stem_at_mid(base, cp_glyph(base, 0x00B9))
 
@@ -337,22 +317,20 @@ def superior_n(base, log):
 
 
 def import_math(base, log):
-    """∈ ∉ sized to '+' height, ∝ to '+' width, ∇ to cap height; all centred like the base glyphs and
-    emboldened so their strokes match Schibsted's '+' bar. ℏ maps to Schibsted's own ħ."""
     math = TTFont(fetch_file(MATH, "NotoSansMath-Regular.ttf"))
     mplus = glyph_bounds(math, cp_glyph(math, "+"))
     bplus = glyph_bounds(base, cp_glyph(base, "+"))
     m_bar, b_bar = plus_bar(math), plus_bar(base)
     s_op = (bplus[3] - bplus[1]) / (mplus[3] - mplus[1])
-    s_prop = (bplus[2] - bplus[0]) / (lambda b: b[2] - b[0])(glyph_bounds(math, cp_glyph(math, 0x221D)))
+    s_prop = (bplus[2] - bplus[0]) / (lambda b: b[2] - b[0])(glyph_bounds(math, cp_glyph(math, PROPORTIONAL_TO)))
     s_cap = glyph_bounds(base, cp_glyph(base, "H"))[3] / glyph_bounds(math, cp_glyph(math, "H"))[3]
     axis_base = (bplus[1] + bplus[3]) / 2
     axis_math = (mplus[1] + mplus[3]) / 2
-    for cp, s, centred in ((0x2208, s_op, True), (0x2209, s_op, True), (0x221D, s_prop, True),
+    for cp, s, centred in ((0x2208, s_op, True), (0x2209, s_op, True), (PROPORTIONAL_TO, s_prop, True),
                            (0x2207, s_cap, False)):
         g = cp_glyph(math, cp)
         dy = axis_base - s * axis_math if centred else 0
-        if cp == 0x221D:  # centre ∝ on its own bbox, not Noto's axis
+        if cp == PROPORTIONAL_TO:
             b = glyph_bounds(math, g)
             dy = axis_base - s * (b[1] + b[3]) / 2
         grow = max(0.0, b_bar - m_bar * s)
@@ -364,7 +342,6 @@ def import_math(base, log):
     return math
 
 
-# ---------- GPOS / GDEF ----------
 
 def gdef_classes(font):
     if "GDEF" not in font:
@@ -403,9 +380,6 @@ def part_centre(pts, bounds, top, advance):
 
 
 def add_mark_to_base(font, gap, log):
-    """Append a MarkToBase lookup to the existing GPOS 'mark' feature. Marks reuse Schibsted's designed
-    mark anchors (so spacing matches its own accented letters); bases get anchors over the top/bottom
-    of their outline. Designed base anchors are kept unless they float far above the glyph."""
     upm = font["head"].unitsPerEm
     cmap = font.getBestCmap()
     classes = gdef_classes(font)
@@ -513,7 +487,6 @@ def add_grek_script(table):
     table.ScriptList.ScriptCount = len(table.ScriptList.ScriptRecord)
 
 
-# ---------- naming ----------
 
 def copyright_of(font):
     return (font["name"].getDebugName(0) or "").strip()
@@ -544,8 +517,8 @@ def rename(font, weight, copyrights, designers):
         name.setName(s, nid, 3, 1, 0x409)
     font["head"].fontRevision = 1.0
     os2 = font["OS/2"]
-    os2.ulUnicodeRange1 |= 1 << 7  # Greek and Coptic
-    os2.ulCodePageRange1 |= 1 << 3  # 1253 Greek
+    os2.ulUnicodeRange1 |= UNICODE_RANGE_GREEK_AND_COPTIC
+    os2.ulCodePageRange1 |= CODE_PAGE_1253_GREEK
 
 
 def build(args):

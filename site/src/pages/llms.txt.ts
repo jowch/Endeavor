@@ -1,6 +1,3 @@
-// /llms.txt: what an agent handed a link to this site needs, as plain text
-// (https://llmstxt.org). The install text is site/agent-install.md, the same
-// block the landing page, the install guide and both READMEs show.
 import install from '../../agent-install.md?raw';
 
 const site = 'https://jowch.github.io/Endeavor';

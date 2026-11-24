@@ -307,6 +307,83 @@ pub(crate) fn bundled_codex() -> Option<PathBuf> {
     })
 }
 
+const CODEX_LIST_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn codex_without_users_endeavor() -> Option<PathBuf> {
+    if std::env::var_os("CODEX_PATH").is_some_and(|path| !path.is_empty()) {
+        return None;
+    }
+    let codex = bundled_codex()?;
+    let mut list = std::process::Command::new(&codex);
+    list.args(["mcp", "list", "--json"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    endeavor_mcp::client::no_window(&mut list);
+    let started = std::time::Instant::now();
+    let listed = output_within(list, CODEX_LIST_LIMIT);
+    eprintln!("Codex: listing the user's MCP servers took {:?}", started.elapsed());
+    if !lists_users_endeavor(&listed?) {
+        return None;
+    }
+    let dir = crate::install::app_dir().ok()?;
+    let name = if cfg!(windows) { "codex-without-endeavor.cmd" } else { "codex-without-endeavor" };
+    let script = dir.join(name);
+    let staged = dir.join(format!("{name}.{}", std::process::id()));
+    std::fs::write(&staged, codex_script(&codex)).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).ok()?;
+    }
+    if std::fs::rename(&staged, &script).is_err() {
+        let _ = std::fs::remove_file(&staged);
+        return None;
+    }
+    Some(script)
+}
+
+fn output_within(mut command: std::process::Command, limit: std::time::Duration) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        out
+    });
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                eprintln!("Codex: listing the user's MCP servers took over {limit:?}; starting Codex as it is");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let out = reader.join().ok()?;
+    status.success().then_some(out)
+}
+
+fn lists_users_endeavor(json: &[u8]) -> bool {
+    let Ok(serde_json::Value::Array(servers)) = serde_json::from_slice(json) else { return false };
+    servers.iter().any(|server| server["name"] == USERS_ENDEAVOR_SERVER_NAME && server["enabled"] != false)
+}
+
+fn codex_script(codex: &Path) -> String {
+    let off = format!("mcp_servers.{USERS_ENDEAVOR_SERVER_NAME}.enabled=false");
+    if cfg!(windows) {
+        cmd_script(&codex.display().to_string(), &off)
+    } else {
+        format!("#!/bin/sh\nexec '{}' -c {off} \"$@\"\n", codex.display().to_string().replace('\'', "'\\''"))
+    }
+}
+
+fn cmd_script(codex: &str, off: &str) -> String {
+    format!("@\"{}\" -c {off} %*\r\n", codex.replace('%', "%%"))
+}
+
 fn test_no_steering() -> bool {
     #[cfg(debug_assertions)]
     if let Some(file) = std::env::var_os("ENDEAVOR_TEST_NO_STEERING") {
@@ -370,6 +447,11 @@ fn adapter_command(agent: Agent, progress: &dyn Fn(Progress)) -> Result<Vec<Stri
             vec![exe.display().to_string()]
         }
     };
+    if agent == Agent::Codex
+        && let Some(codex) = codex_without_users_endeavor()
+    {
+        env.push(format!("CODEX_PATH={}", codex.display()));
+    }
     if facts.private_temp {
         let temp = crate::install::app_dir()?.join(format!("{}-temp", agent_slug(agent)));
         let _ = std::fs::remove_dir_all(&temp);
@@ -486,7 +568,7 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool, notebook: 
             "settingSources": sources,
             "strictMcpConfig": !personal,
             "plugins": [{ "type": "local", "path": plugin_dir }],
-            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false } },
+            "settings": { "enabledPlugins": { USERS_ENDEAVOR_PLUGIN: false }, "deniedMcpServers": [{ "serverName": USERS_ENDEAVOR_SERVER_NAME }] },
             "disallowedTools": disallowed,
             "allowedTools": allowed,
             "mcpServers": { crate::celldiff::MCP_SERVER: notebook },
@@ -495,6 +577,8 @@ fn session_options(personal: bool, plugin_dir: &str, on_server: bool, notebook: 
 }
 
 const USERS_ENDEAVOR_PLUGIN: &str = "endeavor@endeavor";
+
+const USERS_ENDEAVOR_SERVER_NAME: &str = "endeavor";
 
 const USERS_ENDEAVOR_SERVER: &str = "mcp__endeavor";
 
@@ -1278,7 +1362,7 @@ mod tests {
         for own in [false, true] {
             for on_server in [false, true] {
                 let settings = &session_options(own, "/p", on_server, serde_json::Value::Null)["claudeCode"]["options"]["settings"];
-                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false } }));
+                assert_eq!(settings, &serde_json::json!({ "enabledPlugins": { "endeavor@endeavor": false }, "deniedMcpServers": [{ "serverName": "endeavor" }] }));
             }
         }
         let codex = super::CODEX.env.iter().find(|(name, _)| *name == "CODEX_CONFIG").expect("Codex's adapter gets CODEX_CONFIG").1;
@@ -1288,6 +1372,42 @@ mod tests {
             let off = &session_options(true, "/p", on_server, serde_json::Value::Null)["claudeCode"]["options"]["disallowedTools"];
             assert_eq!(off[0], "mcp__endeavor");
         }
+    }
+
+    #[test]
+    fn codex_turns_off_a_hand_added_endeavor_server_only_when_there_is_one() {
+        let listed = |servers: serde_json::Value| super::lists_users_endeavor(servers.to_string().as_bytes());
+        assert!(!listed(serde_json::json!([])), "none: the adapter's own Codex, as before");
+        assert!(!listed(serde_json::json!([{ "name": "notebook", "enabled": true }])));
+        assert!(listed(serde_json::json!([{ "name": "other", "enabled": true }, { "name": "endeavor", "enabled": true }])));
+        assert!(!listed(serde_json::json!([{ "name": "endeavor", "enabled": false }])), "already off");
+        assert!(!super::lists_users_endeavor(b"WARNING: not JSON"));
+        let script = super::codex_script(std::path::Path::new("/opt/it's/codex"));
+        #[cfg(unix)]
+        assert_eq!(script, "#!/bin/sh\nexec '/opt/it'\\''s/codex' -c mcp_servers.endeavor.enabled=false \"$@\"\n");
+        #[cfg(windows)]
+        assert!(script.starts_with("@\"/opt/it's/codex\" -c mcp_servers.endeavor.enabled=false %*"));
+    }
+
+    #[test]
+    fn a_cmd_script_keeps_a_percent_in_the_path() {
+        assert_eq!(
+            super::cmd_script(r"C:\Users\a%b\AppData\Local\codex.exe", "mcp_servers.endeavor.enabled=false"),
+            "@\"C:\\Users\\a%%b\\AppData\\Local\\codex.exe\" -c mcp_servers.endeavor.enabled=false %*\r\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_codex_list_that_stalls_is_given_up_on() {
+        let mut slow = std::process::Command::new("sleep");
+        slow.arg("10").stdout(std::process::Stdio::piped());
+        let started = std::time::Instant::now();
+        assert_eq!(super::output_within(slow, std::time::Duration::from_millis(200)), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let mut quick = std::process::Command::new("echo");
+        quick.arg("[]").stdout(std::process::Stdio::piped());
+        assert_eq!(super::output_within(quick, std::time::Duration::from_secs(5)).as_deref(), Some(&b"[]\n"[..]));
     }
 
     #[test]
