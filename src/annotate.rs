@@ -44,6 +44,7 @@ pub struct Ask {
 #[derive(Debug, PartialEq)]
 pub enum Message {
     Ready,
+    OutOfStep,
     Mode(bool),
     Ask(Ask),
     Quote(Picks),
@@ -87,6 +88,12 @@ pub fn is_uuid(s: &str) -> bool {
     s.len() == 36 && s.matches('-').count() == 4 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
+const MARIMO_CELL_ID_MAX: usize = 16;
+
+fn is_cell_id(s: &str) -> bool {
+    is_uuid(s) || ((1..=MARIMO_CELL_ID_MAX).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 pub fn parse(body: &str) -> Option<Message> {
     parse_with(body, page_nonce())
 }
@@ -103,6 +110,7 @@ fn parse_with(body: &str, nonce: &str) -> Option<Message> {
     let uuid = |key: &str| v.get(key)?.as_str().filter(|s| is_uuid(s)).map(str::to_owned);
     match v.get("type")?.as_str()? {
         "ready" => Some(Message::Ready),
+        "out_of_step" => Some(Message::OutOfStep),
         "ask" => {
             let (notebook, id) = (uuid("notebook")?, uuid("cell")?);
             let text = match v.get("kind")?.as_str()? {
@@ -207,13 +215,13 @@ fn pick_quote(pick: &serde_json::Value, notebook: &str) -> Option<(Quoted, Optio
     let png = || std::sync::Arc::new(Vec::new());
     let part = pick.get("part")?.as_str()?;
     if part == "box" {
-        let cells: Vec<String> = pick.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_uuid(s)).map(str::to_owned)).collect::<Option<_>>()?;
+        let cells: Vec<String> = pick.get("cells")?.as_array()?.iter().map(|c| c.as_str().filter(|s| is_cell_id(s)).map(str::to_owned)).collect::<Option<_>>()?;
         if cells.len() > MAX_CELLS {
             return None;
         }
         return Some((Quoted::Box { notebook, cells, png: png() }, shot));
     }
-    let cell = pick.get("cell")?.as_str().filter(|s| is_uuid(s))?.to_string();
+    let cell = pick.get("cell")?.as_str().filter(|s| is_cell_id(s))?.to_string();
     let code = capped(pick.get("code"), MAX_CODE);
     let text = || capped(pick.get("text"), MAX_CODE);
     let part = match part {
@@ -287,6 +295,7 @@ mod tests {
     fn parses_valid_messages() {
         assert_eq!(parse_with(r#"{"type":"mode","on":true}"#, ""), Some(Message::Mode(true)));
         assert_eq!(parse_with(r#"{"type":"ready"}"#, ""), Some(Message::Ready));
+        assert_eq!(parse_with(r#"{"type":"out_of_step"}"#, ""), Some(Message::OutOfStep));
         let ask = |kind: &str| {
             parse_with(
                 &format!(r#"{{"type":"ask","kind":"{kind}","notebook":"{NB}","cell":"{C1}","code":"x = lsq(1)","error":"UndefVarError: lsq"}}"#),
@@ -353,6 +362,16 @@ mod tests {
         assert_eq!(parse_with(flat, ""), None, "a picture needs an area");
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":"y = 3"}}"#), ""), Some(Message::Code { cell: C1.into(), code: Some("y = 3".into()) }));
         assert_eq!(parse_with(&format!(r#"{{"type":"code","cell":"{C1}","code":null}}"#), ""), Some(Message::Code { cell: C1.into(), code: None }));
+    }
+
+    #[test]
+    fn a_marimo_cell_is_picked_by_its_short_id() {
+        let body = format!(r#"{{"type":"quote","notebook":"{NB}","comment":"","picks":[{{"part":"cell","cell":"Hbol","code":"x = 1"}},{{"part":"box","cells":["MJUe","vblA"]}}]}}"#);
+        let Some(Message::Quote(picks)) = parse_with(&body, "") else { panic!("{body}") };
+        assert!(matches!(&picks.quotes[0].0, Quoted::Cell { cell, .. } if cell == "Hbol"));
+        assert!(matches!(&picks.quotes[1].0, Quoted::Box { cells, .. } if cells == &["MJUe", "vblA"]));
+        let too_long = format!(r#"{{"type":"quote","notebook":"{NB}","comment":"","picks":[{{"part":"cell","cell":"{}","code":""}}]}}"#, "a".repeat(17));
+        assert_eq!(parse_with(&too_long, ""), None);
     }
 
     #[test]

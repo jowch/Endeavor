@@ -8,12 +8,12 @@ const NB = "0f381e2e-b8ca-11f1-b549-49cf0ce82801";
 const [A, B] = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"];
 const CODE = "rates = map(1:1000) do _\n  fit(rows)\nend";
 
-async function page(body) {
+async function page(body, url = `http://localhost/edit?id=${NB}`) {
   const dom = new JSDOM(
     body ?? `<body><pluto-cell id="${A}"><pluto-output><div class="markdown"><p>Each resample draws rows.</p></div><pre>0.42</pre></pluto-output>` +
       `<pluto-input><div class="cm-content">${CODE.split("\n").map((l) => `<div class="cm-line">${l}</div>`).join("")}</div></pluto-input></pluto-cell>` +
       `<pluto-cell id="${B}"><pluto-output><div><svg><g><path/></g></svg></div></pluto-output></pluto-cell></body>`,
-    { url: `http://localhost/edit?id=${NB}`, runScripts: "outside-only", pretendToBeVisual: true },
+    { url, runScripts: "outside-only", pretendToBeVisual: true },
   );
   const { window } = dom;
   Object.defineProperty(window.navigator, "platform", { value: "MacIntel" });
@@ -57,6 +57,27 @@ test("a click picks the smallest thing under the pointer; Shift adds", async () 
   });
   assert.ok(window.document.body.classList.contains("annotating"), "Point stays on for the next pick");
   assert.equal($("#annotate-bar .status").textContent, "Click something to pick it");
+});
+
+test("on marimo's page, Point picks marimo's cells by their ids, for the notebook the app names", async () => {
+  const marimoCell = (id, code, output) =>
+    `<div class="marimo-cell" id="cell-${id}" data-cell-id="${id}"><div class="output-area" data-cell-role="output" id="output-${id}">${output}</div>` +
+    `<div data-testid="cell-editor"><div class="cm-editor"><div class="cm-content">${code.split("\n").map((l) => `<div class="cm-line">${l}</div>`).join("")}</div></div></div></div>`;
+  const { window, $, sent, mouse, click, comment } = await page(
+    `<body>${marimoCell("Hbol", CODE, "<p>Each resample draws rows.</p>")}${marimoCell("MJUe", "x = 42", "<pre>42</pre>")}</body>`,
+    "http://localhost/marimo/?file=%2Ftmp%2Fa.py",
+  );
+  window.__endeavor.receive({ type: "context", host: "This Mac", asking: false, readonly: false, notebook: NB });
+  click($("#output-Hbol p"));
+  assert.equal($("#annotate-bar .status").textContent, "Output of rates");
+  const lines = window.document.querySelectorAll("#cell-MJUe .cm-line");
+  mouse(lines[0], "mousedown", 40, 30);
+  mouse(lines[0], "mousemove", 40, 50);
+  mouse(lines[0], "mouseup", 40, 50);
+  mouse(lines[0], "click", 40, 50);
+  comment("why?");
+  assert.equal(sent.at(-1).notebook, NB);
+  assert.deepEqual(sent.at(-1).picks, [{ part: "lines", cell: "MJUe", code: "x = 42", lines: [1, 1], text: "x = 42" }]);
 });
 
 test("a figure goes with its picture, taken while the overlay hides", async () => {

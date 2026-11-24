@@ -9,6 +9,7 @@ export interface Context {
   agent: string;
   asking: boolean;
   crash: { title: string; body: string } | null;
+  notebook: string;
 }
 
 type Listener = (nb: NotebookLike, model: StatusModel) => void;
@@ -17,7 +18,7 @@ const listeners: Listener[] = [];
 let last: NotebookLike | null = null;
 let model: StatusModel | null = null;
 let lastSent = "";
-export const context: Context = { host: "This Mac", agent: "Claude", asking: false, crash: null };
+export const context: Context = { host: "This Mac", agent: "Claude", asking: false, crash: null, notebook: "" };
 let drawerOf: () => Drawer = () => null;
 
 export function onNotebook(listener: Listener): void {
@@ -29,7 +30,7 @@ export function current(): { nb: NotebookLike; model: StatusModel } | null {
   return last && model ? { nb: last, model } : null;
 }
 
-export const notebookId = (): string => new URLSearchParams(location.search).get("id") ?? "";
+export const notebookId = (): string => new URLSearchParams(location.search).get("id") ?? context.notebook;
 
 export function setDrawerSource(source: () => Drawer): void {
   drawerOf = source;
@@ -94,6 +95,7 @@ export function initState(): void {
     context.agent = msg.agent ?? "Claude";
     context.asking = msg.asking;
     context.crash = msg.crash ?? null;
+    context.notebook = msg.notebook ?? "";
     if (last && model) listeners.forEach((l) => l(last!, model!));
   });
   lastSent = "";

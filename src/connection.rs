@@ -89,6 +89,8 @@ impl Lost {
     }
 }
 
+const DOWNLOADING_UV: &str = "Downloading uv";
+
 #[derive(Clone, Debug)]
 pub struct Steps {
     pub done: Vec<String>,
@@ -1149,7 +1151,8 @@ impl Workspace {
         for (key, folder, kind) in folders {
             self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
-            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
+            let on = host.clone();
+            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &on) }).detach();
         }
         for (key, policy, edits) in policies {
             self.send_policy(key, policy, edits, cx);
@@ -1338,6 +1341,7 @@ impl Workspace {
             cx.notify();
         }
         let exits = crate::crash::new_exits(&connection.notebooks, &list, &event["cells"]);
+        let now_running = pluto::newly_allowed(&connection.notebooks, &list);
         connection.notebooks = list;
         for (notebook, cell, name) in pluto::user_edits(&connection.cells, &event["cells"]) {
             for session in self.sessions.iter_mut().filter(|s| s.notebook.as_deref() == Some(notebook.as_str())) {
@@ -1363,6 +1367,10 @@ impl Workspace {
             self.note_stopped_file(host, path, cx);
         }
         self.crash_progress(host);
+        let python_pages: Vec<u64> = self.sessions.iter().filter(|s| s.place.host == *host && s.kind == Backend::Marimo && s.notebook_path.as_ref().is_some_and(|p| now_running.contains(p))).map(|s| s.key).collect();
+        for key in python_pages {
+            self.reload_notebook(key, cx);
+        }
         for (path, cell) in exits {
             self.notebook_stopped((host.clone(), path), cell, cx);
         }
@@ -1857,21 +1865,27 @@ impl Workspace {
         cx.notify();
     }
 
-    fn retry_r(&mut self, host: &HostId, install: bool, cx: &mut Context<Self>) {
+    fn retry_r(&mut self, host: &HostId, install: Option<Backend>, cx: &mut Context<Self>) {
         let bridge = self.connections.get_mut(host).and_then(|connection| {
             connection.r_failed = None;
             connection.bridge()
         });
         let Some(again) = self.r_retry_target(host) else { return cx.notify() };
-        match bridge.filter(|_| install) {
-            Some(bridge) => {
-                let allowed = cx.background_executor().spawn(async move { pluto::allow_r_install(&bridge) });
+        match bridge.zip(install) {
+            Some((bridge, kind)) => {
+                let allowed = cx.background_executor().spawn(async move { if kind == Backend::Marimo { pluto::allow_uv_install(&bridge) } else { pluto::allow_r_install(&bridge) } });
                 let host = host.clone();
                 cx.spawn(async move |this, cx| {
                     let allowed = allowed.await;
                     let _ = this.update(cx, |this, cx| match allowed {
-                        Ok(()) => this.open_again(again, cx),
-                        Err(e) => this.julia_answer(&host, Backend::Ember, Some(&format!("r_failed::Couldn't install R: {e}")), cx),
+                        Ok(()) => {
+                            if let Some(connection) = this.connections.get_mut(&host).filter(|_| kind == Backend::Marimo) {
+                                connection.r.get_or_insert_with(Steps::r).r_step(DOWNLOADING_UV);
+                            }
+                            this.open_again(again, cx)
+                        }
+                        Err(e) if kind == Backend::Marimo => this.julia_answer(&host, kind, Some(&format!("python_failed::Couldn't download uv: {e}")), cx),
+                        Err(e) => this.julia_answer(&host, kind, Some(&format!("r_failed::Couldn't install R: {e}")), cx),
                     });
                 })
                 .detach();
@@ -1903,8 +1917,8 @@ impl Workspace {
             Status::Ready => match (kind, connection) {
                 (Backend::Pluto, Some(Connection { julia_failed: Some(why), .. })) => HostPane::JuliaFailed(why.clone()),
                 (Backend::Pluto, Some(Connection { julia: Some(steps), .. })) => HostPane::JuliaStarting(steps.current.clone()),
-                (Backend::Ember, Some(Connection { r_failed: Some(why), .. })) => HostPane::RFailed(why.clone()),
-                (Backend::Ember, Some(Connection { r: Some(steps), .. })) => HostPane::RStarting(steps.current.clone()),
+                (Backend::Ember | Backend::Marimo, Some(Connection { r_failed: Some(why), .. })) if is_python_failure(why) == (kind == Backend::Marimo) => HostPane::RFailed(why.clone()),
+                (Backend::Ember | Backend::Marimo, Some(Connection { r: Some(steps), .. })) => HostPane::RStarting(steps.current.clone()),
                 _ => return None,
             },
             Status::Connecting | Status::Browsing | Status::Starting => HostPane::Starting,
@@ -1987,7 +2001,7 @@ impl Workspace {
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
                 let offer = own_r_offered().filter(|_| *host == HostId::ThisMac && error.starts_with("r_not_found::"));
-                let button = |id: &'static str, label: &'static str, install: bool| {
+                let button = |id: &'static str, label: &'static str, install: Option<Backend>| {
                     let host = host_id.clone();
                     div()
                         .id(id)
@@ -2001,18 +2015,24 @@ impl Workspace {
                         .button_text(label)
                         .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, install, cx)))
                 };
-                if let Some(item) = offer {
+                if uv_offered(&host_id, &error) {
+                    let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {}.", crate::platform::this_computer!(lower));
+                    resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("uv-install", "Install uv", Some(Backend::Marimo)))
+                } else if let Some(why) = pluto::python_failed(&error) {
+                    let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
+                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("python-retry", "Try again", None))
+                } else if let Some(item) = offer {
                     let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
                     let words = format!(
                         "Endeavor can install its own {}{size}, just for Endeavor. It changes nothing else on {}.",
                         item.name,
                         crate::platform::this_computer!(lower)
                     );
-                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", true))
+                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", Some(Backend::Ember)))
                 } else {
                     let why = pluto::r_failed(&error).unwrap_or(&error);
                     let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
-                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", false))
+                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", None))
                 }
             }
             HostPane::Starting => {
@@ -2084,6 +2104,14 @@ pub enum HostPane {
     NotConnected(String),
 }
 
+fn is_python_failure(error: &str) -> bool {
+    pluto::python_failed(error).is_some()
+}
+
+fn uv_offered(host: &HostId, error: &str) -> bool {
+    crate::new_session::SHOWS_PYTHON && *host == HostId::ThisMac && error.starts_with("python_not_found::")
+}
+
 pub fn own_r_offered() -> Option<wire::Item> {
     own_r_item().filter(|_| endeavor_mcp::r::own_installed().is_none())
 }
@@ -2097,7 +2125,7 @@ pub fn pane_failure(kind: Backend, error: &str) -> Option<String> {
     match kind {
         Backend::Pluto => pluto::julia_failed(error).or_else(|| pluto::open_stuck(error)).map(str::to_owned),
         Backend::Ember => pluto::r_failed(error).map(|_| error.to_owned()).or_else(|| pluto::open_stuck(error).map(|why| format!("r_failed::{why}"))),
-        Backend::Marimo => None,
+        Backend::Marimo => pluto::python_failed(error).map(|_| error.to_owned()).or_else(|| pluto::open_stuck(error).map(|why| format!("python_failed::{why}"))),
     }
 }
 
@@ -2467,6 +2495,13 @@ mod tests {
         assert_eq!(pane_failure(Backend::Ember, "r_not_found::No R here").as_deref(), Some("r_not_found::No R here"));
         assert_eq!(pane_failure(Backend::Ember, "open_stuck::It's still opening.").as_deref(), Some("r_failed::It's still opening."));
         assert_eq!(pane_failure(Backend::Ember, julia), None);
+        let no_uv = "python_not_found::Python notebooks need uv, which isn't installed on this computer.";
+        assert_eq!(pane_failure(Backend::Marimo, no_uv).as_deref(), Some(no_uv));
+        assert_eq!(pane_failure(Backend::Marimo, "open_stuck::It's still opening.").as_deref(), Some("python_failed::It's still opening."));
+        assert_eq!(pane_failure(Backend::Marimo, "r_failed::R stopped while starting"), None);
+        assert!(super::is_python_failure(no_uv) && !super::is_python_failure("r_not_found::No R here"));
+        assert_eq!(super::uv_offered(&crate::hosts::HostId::ThisMac, no_uv), crate::new_session::SHOWS_PYTHON);
+        assert!(!super::uv_offered(&crate::hosts::HostId::ThisMac, "python_failed::marimo stopped"));
     }
 
     #[test]

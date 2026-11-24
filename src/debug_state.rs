@@ -156,6 +156,7 @@ impl Workspace {
                 "account": format!("{:?}", self.antigravity_account),
                 "usage_limit": self.usage_limit_state(Agent::Antigravity),
             },
+            "hosts": self.hosts_debug(),
             "app_update": self.app_update_debug(),
             "sign_in": self.sign_in_state(),
             "sidebar": self.sidebar_state(cx),
@@ -182,9 +183,44 @@ impl Workspace {
                 "details": n.details().then(|| json!({ "open": n.details_open, "text": n.raw })),
             })),
             "page": page,
+            "out_of_step_reload_secs_ago": self.active.and_then(|key| self.sessions.iter().find(|s| s.key == key)).and_then(|s| s.out_of_step_reload).map(|at| at.elapsed().as_secs()),
             "cell_shot": self.second.last,
             "cell_shot_view": self.second.view(),
         })
+    }
+
+    fn hosts_debug(&self) -> Value {
+        use crate::host_list::HostState;
+        let mut hosts: Vec<(&crate::hosts::HostId, &crate::connection::Connection)> = self.connections.iter().collect();
+        hosts.sort_by_key(|(host, _)| self.hosts.name(host));
+        Value::Array(
+            hosts
+                .into_iter()
+                .map(|(host, c)| {
+                    let state = match self.host_state(host) {
+                        HostState::Unknown => json!({ "state": "unknown" }),
+                        HostState::Connecting => json!({ "state": "connecting" }),
+                        HostState::Checking => json!({ "state": "checking" }),
+                        HostState::Connected => json!({ "state": "connected" }),
+                        HostState::Starting => json!({ "state": "starting" }),
+                        HostState::Stopping => json!({ "state": "stopping" }),
+                        HostState::Running { notebooks, job } => json!({ "state": "running", "notebooks": notebooks, "job": job.map(|(id, ends_at)| json!({ "id": id, "ends_at": ends_at })) }),
+                        HostState::Queued { job, starting, reason } => json!({ "state": if starting { "job_starting" } else { "queued" }, "job": job, "reason": reason }),
+                        HostState::NotRunning => json!({ "state": "not_running" }),
+                        HostState::Lost => json!({ "state": "lost" }),
+                        HostState::SigningIn => json!({ "state": "signing_in" }),
+                        HostState::Failed(e) => json!({ "state": "failed", "error": e }),
+                    };
+                    let starting = matches!(c.status, crate::connection::Status::Starting);
+                    json!({
+                        "host": host,
+                        "name": self.hosts.name(host),
+                        "status": state,
+                        "steps": starting.then(|| json!({ "done": c.steps.done, "current": c.steps.current, "detail": c.steps.detail })),
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn app_update_debug(&self) -> Value {
@@ -543,6 +579,7 @@ impl Workspace {
             PaneShows::Stopped(_) => "stopped",
             PaneShows::Crashed => "crashed",
             PaneShows::Opening => "opening",
+            PaneShows::PythonPreview => "python_preview",
             PaneShows::Page => "page",
         };
         let page = (shown == PaneShows::Page).then(|| {
@@ -551,7 +588,7 @@ impl Workspace {
             let reported = s.notebook.as_deref().is_some_and(|id| p.notebook == id);
             json!({
                 "notebook": s.notebook,
-                "backend": crate::viewed_notebook(&url).map(|(kind, _)| kind.name()),
+                "backend": crate::viewed_kind(&url).map(|kind| kind.name()),
                 "look": self.settings.notebook_theme,
                 "safe_preview": reported && p.safe,
                 "read_only": self.read_only(s),
@@ -773,6 +810,7 @@ fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value
         HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
         HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
         HostPane::RStarting(step) => ("r_starting", Some(step)),
+        HostPane::RFailed(reason) if kind == wire::backend::Backend::Marimo => ("python_failed", Some(reason)),
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),

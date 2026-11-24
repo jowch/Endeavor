@@ -71,6 +71,15 @@ To wait for something, poll the dump. For example, loop until
   it's `for` (`row`, `session` for the chat header's title, `notebook` or
   `share`) and its `items`, each with its `label` and `key`.
 - `offline`. Null when online. Otherwise, how long the app has been offline.
+- `hosts`. Each host the app has connected to, sorted by `name`, with its
+  `host` id and its `status` as the Where chip shows it. `state` is
+  `unknown`, `connecting`, `checking`, `connected`, `starting`, `stopping`,
+  `running` (with `notebooks`, and its cluster `job`'s `id` and `ends_at`),
+  `queued` or `job_starting` (a cluster job waiting for a node, then
+  starting on one, with the `job` and the queue's `reason`), `not_running`,
+  `lost`, `signing_in` or `failed` (with the `error`). `steps` is the start's
+  steps as the host list shows them (`done`, `current`, `detail`) while it
+  starts, else null.
 - `julia_here`. Julia on this computer: `status` is what its runtime last
   said (`endeavor/julia_status`: `state` `not_started`, `starting` with `step`
   and `quiet_secs`, `ready`, or `failed` with `code` and `message`; null with
@@ -96,6 +105,9 @@ To wait for something, poll the dump. For example, loop until
   `resets_in_secs`, or null when Claude Code's message gave no time.
   `codex` has the same `usage_limit` for Codex: one agent's limit doesn't
   hold the other's sessions.
+- `out_of_step_reload_secs_ago`. How long ago the active session's page
+  was loaded again because Pluto's page lost its place with the server
+  (#285), or null. A second loss within a minute shows the notice instead.
 - `notice`. A one-off failure's notice (a failed export, rename, move, run,
   restart, stop, new notebook or sign out), or null: its `spot` (where it
   hangs: `notebook_name`, `notebook_buttons`, `notebook_pane` or

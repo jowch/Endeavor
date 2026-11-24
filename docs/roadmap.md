@@ -33,8 +33,10 @@ it is announced is tracked in [#156](https://github.com/jowch/Endeavor/issues/15
   platform (#148 on Linux, #10 on Windows); a newcomer reaches a first finished
   analysis with no help.
 - **Python notebooks through marimo** ([#1](https://github.com/jowch/Endeavor/issues/1),
-  [marimo.md](marimo.md)). Next engine after Ember; the design needs a refresh
-  against the engine router before any code.
+  [marimo.md](marimo.md)). Python notebooks open, are made and run in the app on
+  this computer (Mac and Linux), with Point, and Install uv where there's no uv.
+  Left: servers and clusters, Windows, and Endeavor's other page tools on
+  marimo's page.
 - **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
   Linux, and on servers and clusters. On Windows the chip offers only Julia
   and lists no `.R` files, until Ember runs there (Ember #48, #49).
@@ -104,7 +106,7 @@ worker is busy, and SIGTERM can leave Julia hung mid-exit) are
 |---|---|---|
 | `diagram.rs` `cached` | GPUI keeps each picture it has drawn for the window's life, so each width a diagram is laid out at keeps its pixels (about 1 to 3 MB) | a session with many diagrams, resized often, grows noticeably |
 | `notify.rs` `flash` | on Windows, "Claude is waiting for you" flashes the taskbar button instead of showing a notification, and coming back doesn't open the session that asked | a toast, with the app's AppUserModelID on the installer's Start menu shortcut |
-| `connection.rs` `waits`, `notebook_pane.rs` `engine_logo` | Python notebooks (marimo) don't open in the app yet: R's count stands in for Python's, and there's no marimo logo | marimo opens in the app ([marimo.md](marimo.md)) |
+| `connection.rs` `waits`, `notebook_pane.rs` `notebook_header` | Python notebooks share R's waits and failure slot on a host, and marimo's page has Point but none of Endeavor's other tools (Share and export, Live docs, Status) or its look | the rest of the app slice ([#1](https://github.com/jowch/Endeavor/issues/1)) |
 | `cell_shot.rs` `cell_shot_job` | the agent's picture of an HTML output is taken only while the notebook pane is on screen | a picture asked for behind Settings |
 | `frontend/src/diff.ts` | the page's diff is an O(n·m) table; when the two versions' line counts multiply past 250,000, no diff is shown | big cells need a diff |
 | `server_dialog.rs` `drop_asks` | when a sign-in ends while another server's question waits behind it, that question comes to the front without the focus | two servers asking at once happens in practice |
