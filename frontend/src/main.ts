@@ -27,7 +27,9 @@ import { initMarimoPackages } from "./marimopackages";
 import { watchRedraws } from "./redraw";
 
 function initOnMarimo() {
+  document.documentElement.dataset.endeavorEngine = "marimo";
   initState();
+  initDrawer();
   initTokens();
   initQuote();
   initAskBox();

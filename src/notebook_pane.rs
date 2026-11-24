@@ -208,8 +208,9 @@ pub enum HeaderTool {
     Packages,
 }
 
-pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
+pub fn header_tools(kind: Backend, endeavor_look: bool, python_packages: bool) -> &'static [HeaderTool] {
     match kind {
+        Backend::Marimo if python_packages => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
         Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
         Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Packages],
         Backend::Pluto | Backend::Ember => &[],
@@ -799,7 +800,7 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = header_drawer(session.kind, shown, page, &self.page);
-        let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
+        let tools = if shown { header_tools(session.kind, endeavor, self.packages_feed.sent_for(session.key).is_some()) } else { &[] };
         let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -1842,6 +1843,7 @@ mod tests {
         assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready), "a reloaded page is sent them again");
     }
 
+    #[test]
     fn a_drawer_asked_for_while_the_page_loads_opens_once_it_is_ready_and_never_on_a_later_page() {
         use super::DrawerAsk;
         let mut ask = DrawerAsk::default();
@@ -1875,12 +1877,13 @@ mod tests {
     }
 
     #[test]
-    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_packages() {
+    fn python_notebooks_get_share_live_docs_and_packages_whatever_the_look_once_the_runtime_has_given_their_packages() {
         use super::{HeaderTool::*, header_tools};
-        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Packages]);
-        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Packages]);
-        assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
-        assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
-        assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");
+        assert_eq!(header_tools(Backend::Pluto, true, false), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Ember, true, false), [Share, Docs, Packages]);
+        assert!(header_tools(Backend::Pluto, false, false).is_empty(), "the classic look keeps Pluto's own buttons");
+        assert_eq!(header_tools(Backend::Marimo, true, true), [Share, Docs, Packages]);
+        assert_eq!(header_tools(Backend::Marimo, false, true), [Share, Docs, Packages], "marimo has no look of ours to switch off");
+        assert_eq!(header_tools(Backend::Marimo, true, false), [Share, Docs], "an older runtime gives no packages to show");
     }
 }

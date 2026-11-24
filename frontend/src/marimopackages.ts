@@ -1,19 +1,10 @@
-import { on } from "./bridge";
-
-export type PackageState = "waiting" | "installing" | "ready" | "failed";
-
-export interface Environment {
-  runtime: string;
-  source: string | null;
-  packages: { name: string; version: string | null; state: PackageState; why?: string }[];
-  dependencies: { count: number; done: number; failed: number } | null;
-  install: { done: number; total: number } | null;
-  failure: { name: string; why: string; cells: string[]; log: string } | null;
-  restart: "required" | "recommended" | null;
-}
+import { on, send } from "./bridge";
+import { drawerTab, showModel } from "./drawer";
+import type { PkgRow, PkgState, StatusModel } from "./status";
 
 export type MarimoEnvironment = {
   python: string | null;
+  python_version?: string | null;
   packages: { name: string; version: string | null }[];
   package_date: string | null;
   install: { step: "asking" | "installing"; packages: string[] } | null;
@@ -22,7 +13,8 @@ export type MarimoEnvironment = {
 
 const canonical = (name: string) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
-export function pythonLine(requirement: string | null): string {
+export function pythonLine(requirement: string | null, found?: string | null): string {
+  if (found) return `Python ${found}`;
   const lowest = requirement?.match(/^\s*>=\s*([\d.]+)\s*$/);
   if (lowest) return `Python ${lowest[1]} or later`;
   return requirement ? `Python ${requirement.trim()}` : "Python";
@@ -34,39 +26,77 @@ export function lastLogLine(log: string): string {
   return telling[telling.length - 1] ?? lines[lines.length - 1] ?? "";
 }
 
-export function fromMarimo(raw: MarimoEnvironment): Environment {
+export function marimoModel(raw: MarimoEnvironment): StatusModel {
   const named = (list: string[] | undefined) => new Set((list ?? []).map(canonical));
   const failed = named(raw.failed?.packages);
   const installing = named(raw.install?.step === "installing" ? raw.install.packages : []);
   const asking = named(raw.install?.step === "asking" ? raw.install.packages : []);
-  const why = raw.failed ? lastLogLine(raw.failed.log) : "";
-  const state = (name: string): PackageState =>
+  const state = (name: string): PkgState =>
     failed.has(name) ? "failed" : installing.has(name) ? "installing" : asking.has(name) ? "waiting" : "ready";
   const listed = new Set(raw.packages.map((p) => canonical(p.name)));
-  const added = [...raw.failed?.packages ?? [], ...raw.install?.packages ?? []].filter((n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i);
-  const packages = [...raw.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
+  const added = [...(raw.failed?.packages ?? []), ...(raw.install?.packages ?? [])].filter(
+    (n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i,
+  );
+  const packages: PkgRow[] = [...raw.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
     const s = state(canonical(p.name));
-    return s === "failed" ? { ...p, state: s, why } : { ...p, state: s };
+    return { name: p.name, state: s, detail: s === "ready" ? (p.version ?? "") : "" };
   });
+  const said = raw.failed ? lastLogLine(raw.failed.log) : "";
+  const failure = raw.failed
+    ? { name: raw.failed.packages.join(", "), why: said ? `couldn't be installed: ${said}` : "couldn't be installed.", cells: [], log: raw.failed.log }
+    : null;
+  const install = installing.size ? { done: 0, total: 0 } : null;
+  const busy = install ? "Installing packages" : null;
+  const runtime = [pythonLine(raw.python, raw.python_version), "uv", raw.package_date ? `PyPI as of ${raw.package_date}` : null].filter(Boolean).join(" · ");
   return {
-    runtime: pythonLine(raw.python),
-    source: raw.package_date ? `PyPI as of ${raw.package_date}` : null,
+    headline: failure ? `Package failed · ${failure.name}` : busy ?? "Ready",
+    runtime,
     packages,
-    dependencies: null,
-    install: installing.size ? { done: 0, total: installing.size } : null,
-    failure: raw.failed ? { name: raw.failed.packages.join(", "), why, cells: [], log: raw.failed.log } : null,
+    deps: null,
+    install,
+    failure,
+    log: raw.failed?.log ?? "",
+    busy,
+    saveFailed: false,
     restart: null,
   };
 }
 
-let latest: Environment | null = null;
+let model: StatusModel | null = null;
+let notebook = "";
+let sent = "";
 
-export function marimoEnvironment(): Environment | null {
-  return latest;
+function report(): void {
+  if (!notebook || !model) return;
+  const msg = {
+    type: "state" as const,
+    notebook,
+    safe: false,
+    busy: model.busy,
+    installing: model.install !== null,
+    restart: model.restart,
+    save_failed: false,
+    package_failed: model.failure?.name ?? null,
+    dead: false,
+    connected: true,
+    drawer: drawerTab(),
+  };
+  const json = JSON.stringify(msg);
+  if (json === sent) return;
+  sent = json;
+  send(msg);
 }
 
 export function initMarimoPackages(): void {
-  on("packages", (msg) => {
-    latest = fromMarimo(msg.environment);
+  const changed = showModel(() => model);
+  on("context", (msg) => {
+    notebook = msg.notebook ?? notebook;
+    report();
   });
+  on("packages", (msg) => {
+    model = marimoModel(msg.environment);
+    changed(model);
+    report();
+  });
+  new MutationObserver(report).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
 }

@@ -709,8 +709,8 @@
     if (message === null) {
       return { sent: false, title: "No answer from Pluto's feedback form", body: "It may not have been sent. Check your internet connection and try again." };
     }
-    const sent = message.startsWith("Submitted");
-    return { sent, title: sent ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
+    const sent2 = message.startsWith("Submitted");
+    return { sent: sent2, title: sent2 ? "Sent to Pluto's developers" : "Pluto couldn't send it", body: message.trim() };
   }
   function showFeedback() {
     const el2 = sheet(
@@ -1291,14 +1291,14 @@
     hint.querySelector(".done").onclick = () => set(false);
     on("annotate", (msg) => set(msg.on));
     on("quote_sent", (msg) => {
-      const sent = underWay.get(msg.ref);
+      const sent2 = underWay.get(msg.ref);
       underWay.delete(msg.ref);
-      if (msg.ok || !sent) return;
+      if (msg.ok || !sent2) return;
       set(true);
-      picks.unshift(...sent.picks.filter((p) => !picks.some((q) => samePick(p, q))));
-      if (sent.comment) {
-        text.value = text.value.trim() ? `${sent.comment}
-${text.value}` : sent.comment;
+      picks.unshift(...sent2.picks.filter((p) => !picks.some((q) => samePick(p, q))));
+      if (sent2.comment) {
+        text.value = text.value.trim() ? `${sent2.comment}
+${text.value}` : sent2.comment;
         text.dispatchEvent(new Event("input"));
       }
       refresh2();
@@ -1714,9 +1714,9 @@ ${text.value}` : sent.comment;
       sendQuote([t.found.pick], comment, add);
     } else {
       if (!comment) return;
-      const notebook2 = new URLSearchParams(location.search).get("id");
+      const notebook3 = new URLSearchParams(location.search).get("id");
       const where = t.kind !== "cell" ? t.kind : isEmpty(t.cell) ? "fill" : "about";
-      send({ type: "prompt", notebook: notebook2, cell: t.cell.id, code: cellCode(t.cell), where, text: comment, add });
+      send({ type: "prompt", notebook: notebook3, cell: t.cell.id, code: cellCode(t.cell), where, text: comment, add });
     }
     o.box.text.value = "";
     closeAsk(t.kind === "cell");
@@ -2024,6 +2024,9 @@ ${text.value}` : sent.comment;
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex; }
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] [data-testid=chrome-body] { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
@@ -2097,6 +2100,7 @@ ${text.value}` : sent.comment;
   var auto = false;
   var autoDone = false;
   var showLog = false;
+  var modelOf = () => current()?.model ?? null;
   var escape3 = (s) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   function height() {
     try {
@@ -2114,6 +2118,7 @@ ${text.value}` : sent.comment;
     return clamped;
   }
   var echoing = false;
+  var drawerTab = () => tab;
   function openDrawer(next, byItself = false) {
     tab = next;
     auto = byItself;
@@ -2164,13 +2169,13 @@ ${text.value}` : sent.comment;
   var hostName = "This Mac";
   var lastHtml = "";
   function render() {
-    const now = current();
-    if (!now || tab !== "packages") return;
-    const html = packagesHtml(now.model);
+    const model3 = modelOf();
+    if (!model3 || tab !== "packages") return;
+    const html = packagesHtml(model3);
     if (html === lastHtml) return;
     lastHtml = html;
     body.innerHTML = html;
-    const failure = now.model.failure;
+    const failure = model3.failure;
     body.querySelector(".showlog").onclick = () => {
       showLog = !showLog;
       render();
@@ -2186,14 +2191,19 @@ ${text.value}` : sent.comment;
     }
   }
   function follow(_, m) {
+    const root = document.documentElement.dataset;
     if (!m.install) autoDone = false;
-    if (m.install && !autoDone && tab === null && document.documentElement.dataset.endeavorLook === "endeavor") {
+    if (m.install && !autoDone && tab === null && (root.endeavorLook === "endeavor" || root.endeavorEngine === "marimo")) {
       autoDone = true;
       openDrawer("packages", true);
     } else if (auto && tab === "packages" && !m.install && !m.failure && !m.busy?.startsWith("Starting")) {
       openDrawer(null);
     }
     render();
+  }
+  function showModel(source) {
+    modelOf = source;
+    return (model3) => follow(null, model3);
   }
   function initDrawer() {
     const style2 = document.createElement("style");
@@ -2205,6 +2215,7 @@ ${text.value}` : sent.comment;
     drawer.dataset.endeavorUi = "";
     drawer.innerHTML = `<div class="grip"></div><header><button data-tab="docs">${book}Live docs</button><button data-tab="packages">${box}Packages</button><span class="grow"></span><button class="close" title="Close">\xD7</button></header><section class="packages"></section>`;
     body = drawer.querySelector(".packages");
+    if (document.documentElement.dataset.endeavorEngine === "marimo") drawer.querySelector('header [data-tab="docs"]').remove();
     document.body.append(drawer);
     for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => pick(b.dataset.tab);
     drawer.querySelector(".close").onclick = () => openDrawer(null);
@@ -2768,8 +2779,8 @@ ${text.value}` : sent.comment;
     }
   }
   function place3() {
-    const notebook2 = document.querySelector("main pluto-notebook");
-    if (notebook2 && callout.nextElementSibling !== notebook2) notebook2.before(callout);
+    const notebook3 = document.querySelector("main pluto-notebook");
+    if (notebook3 && callout.nextElementSibling !== notebook3) notebook3.before(callout);
   }
   function initSafe() {
     const style2 = document.createElement("style");
@@ -3150,6 +3161,7 @@ footer form#feedback { display: none !important; }
     return shown2() === want;
   }
   var reported = null;
+  var moving = 0;
   function besideIconColumn() {
     const column = document.querySelector(ICON_COLUMN)?.getBoundingClientRect();
     if (!column) return { left: 0, bottom: 0 };
@@ -3164,13 +3176,14 @@ footer form#feedback { display: none !important; }
   }
   function follow2() {
     if (sidebarDragging()) endSidebarDrag();
+    if (moving) return;
     const open3 = docsShown();
     if (open3) {
-      document.documentElement.dataset.endeavorDrawer = "docs";
+      if (drawerTab() !== "docs") openDrawer("docs");
       const { left, bottom } = besideIconColumn();
       document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
       document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
-    } else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
+    } else if (drawerTab() === "docs") openDrawer(null);
     if (open3 === reported) return;
     reported = open3;
     send({ type: "docs", open: open3 });
@@ -3185,14 +3198,21 @@ footer form#feedback { display: none !important; }
       return !!option;
     };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow2));
+    on("drawer", (msg) => {
+      moving++;
+      void setDocs(msg.tab === "docs", docsShown, press, wait).finally(() => {
+        moving--;
+        follow2();
+      });
+    });
     new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
     follow2();
   }
 
   // src/marimopackages.ts
   var canonical = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
-  function pythonLine(requirement) {
+  function pythonLine(requirement, found) {
+    if (found) return `Python ${found}`;
     const lowest = requirement?.match(/^\s*>=\s*([\d.]+)\s*$/);
     if (lowest) return `Python ${lowest[1]} or later`;
     return requirement ? `Python ${requirement.trim()}` : "Python";
@@ -3202,39 +3222,80 @@ footer form#feedback { display: none !important; }
     const telling = lines.filter((l) => /error|not found|no solution|because/i.test(l));
     return telling[telling.length - 1] ?? lines[lines.length - 1] ?? "";
   }
-  function fromMarimo(raw) {
+  function marimoModel(raw) {
     const named = (list) => new Set((list ?? []).map(canonical));
     const failed = named(raw.failed?.packages);
     const installing = named(raw.install?.step === "installing" ? raw.install.packages : []);
     const asking = named(raw.install?.step === "asking" ? raw.install.packages : []);
-    const why = raw.failed ? lastLogLine(raw.failed.log) : "";
     const state2 = (name) => failed.has(name) ? "failed" : installing.has(name) ? "installing" : asking.has(name) ? "waiting" : "ready";
     const listed = new Set(raw.packages.map((p) => canonical(p.name)));
-    const added = [...raw.failed?.packages ?? [], ...raw.install?.packages ?? []].filter((n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i);
+    const added = [...raw.failed?.packages ?? [], ...raw.install?.packages ?? []].filter(
+      (n, i, all) => !listed.has(canonical(n)) && all.findIndex((m) => canonical(m) === canonical(n)) === i
+    );
     const packages = [...raw.packages, ...added.map((name) => ({ name, version: null }))].map((p) => {
       const s = state2(canonical(p.name));
-      return s === "failed" ? { ...p, state: s, why } : { ...p, state: s };
+      return { name: p.name, state: s, detail: s === "ready" ? p.version ?? "" : "" };
     });
+    const said = raw.failed ? lastLogLine(raw.failed.log) : "";
+    const failure = raw.failed ? { name: raw.failed.packages.join(", "), why: said ? `couldn't be installed: ${said}` : "couldn't be installed.", cells: [], log: raw.failed.log } : null;
+    const install = installing.size ? { done: 0, total: 0 } : null;
+    const busy = install ? "Installing packages" : null;
+    const runtime = [pythonLine(raw.python, raw.python_version), "uv", raw.package_date ? `PyPI as of ${raw.package_date}` : null].filter(Boolean).join(" \xB7 ");
     return {
-      runtime: pythonLine(raw.python),
-      source: raw.package_date ? `PyPI as of ${raw.package_date}` : null,
+      headline: failure ? `Package failed \xB7 ${failure.name}` : busy ?? "Ready",
+      runtime,
       packages,
-      dependencies: null,
-      install: installing.size ? { done: 0, total: installing.size } : null,
-      failure: raw.failed ? { name: raw.failed.packages.join(", "), why, cells: [], log: raw.failed.log } : null,
+      deps: null,
+      install,
+      failure,
+      log: raw.failed?.log ?? "",
+      busy,
+      saveFailed: false,
       restart: null
     };
   }
-  var latest = null;
+  var model2 = null;
+  var notebook2 = "";
+  var sent = "";
+  function report3() {
+    if (!notebook2 || !model2) return;
+    const msg = {
+      type: "state",
+      notebook: notebook2,
+      safe: false,
+      busy: model2.busy,
+      installing: model2.install !== null,
+      restart: model2.restart,
+      save_failed: false,
+      package_failed: model2.failure?.name ?? null,
+      dead: false,
+      connected: true,
+      drawer: drawerTab()
+    };
+    const json = JSON.stringify(msg);
+    if (json === sent) return;
+    sent = json;
+    send(msg);
+  }
   function initMarimoPackages() {
-    on("packages", (msg) => {
-      latest = fromMarimo(msg.environment);
+    const changed = showModel(() => model2);
+    on("context", (msg) => {
+      notebook2 = msg.notebook ?? notebook2;
+      report3();
     });
+    on("packages", (msg) => {
+      model2 = marimoModel(msg.environment);
+      changed(model2);
+      report3();
+    });
+    new MutationObserver(report3).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
   }
 
   // src/main.ts
   function initOnMarimo() {
+    document.documentElement.dataset.endeavorEngine = "marimo";
     initState();
+    initDrawer();
     initTokens();
     initQuote();
     initAskBox();
