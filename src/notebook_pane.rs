@@ -275,19 +275,20 @@ const PACKAGES_RETRY: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct PackagesFeed {
-    sent: Option<(u64, serde_json::Value)>,
+    latest: Option<(u64, serde_json::Value)>,
+    page_has_it: bool,
     asking: bool,
     next: Option<Instant>,
 }
 
 impl PackagesFeed {
     pub fn page_reloaded(&mut self) {
-        self.sent = None;
+        self.page_has_it = false;
         self.next = None;
     }
 
-    pub fn sent_for(&self, key: u64) -> Option<&serde_json::Value> {
-        self.sent.as_ref().filter(|(k, _)| *k == key).map(|(_, env)| env)
+    pub fn latest_for(&self, key: u64) -> Option<&serde_json::Value> {
+        self.latest.as_ref().filter(|(k, _)| *k == key).map(|(_, env)| env)
     }
 
     fn due(&self, now: Instant) -> bool {
@@ -301,10 +302,11 @@ impl PackagesFeed {
             return None;
         };
         self.next = Some(now + if env["install"].is_null() { PACKAGES_SETTLED } else { PACKAGES_INSTALLING });
-        if self.sent_for(key) == Some(&env) {
+        if self.page_has_it && self.latest_for(key) == Some(&env) {
             return None;
         }
-        self.sent = Some((key, env.clone()));
+        self.latest = Some((key, env.clone()));
+        self.page_has_it = true;
         Some(env)
     }
 }
@@ -800,7 +802,7 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = header_drawer(session.kind, shown, page, &self.page);
-        let tools = if shown { header_tools(session.kind, endeavor, self.packages_feed.sent_for(session.key).is_some()) } else { &[] };
+        let tools = if shown { header_tools(session.kind, endeavor, self.packages_feed.latest_for(session.key).is_some()) } else { &[] };
         let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
@@ -1835,11 +1837,12 @@ mod tests {
         assert_eq!(feed.arrived(7, Ok(ready.clone()), now), Some(ready.clone()));
         assert!(!feed.due(now + PACKAGES_INSTALLING) && feed.due(now + PACKAGES_SETTLED));
         assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready.clone()), "another notebook gets its own");
-        assert_eq!(feed.sent_for(7), None);
+        assert_eq!(feed.latest_for(7), None);
         assert_eq!(feed.arrived(8, Err("lost".into()), now), None);
         assert!(!feed.due(now + PACKAGES_SETTLED) && feed.due(now + PACKAGES_RETRY));
         feed.page_reloaded();
         assert!(feed.due(now));
+        assert_eq!(feed.latest_for(8), Some(&ready), "the header keeps its Packages button while the page reloads");
         assert_eq!(feed.arrived(8, Ok(ready.clone()), now), Some(ready), "a reloaded page is sent them again");
     }
 

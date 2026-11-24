@@ -2024,7 +2024,8 @@ ${text.value}` : sent2.comment;
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
   html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
-  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex; }
+  html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex;
+    left: var(--endeavor-docs-left, 0px); bottom: var(--endeavor-docs-bottom, 0px); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] [data-testid=chrome-body] { padding-bottom: var(--endeavor-drawer-pad); }
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
@@ -3177,13 +3178,13 @@ footer form#feedback { display: none !important; }
   function follow2() {
     if (sidebarDragging()) endSidebarDrag();
     if (moving) return;
+    const { left, bottom } = besideIconColumn();
+    const root = document.documentElement.style;
+    if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
+    if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
     const open3 = docsShown();
-    if (open3) {
-      if (drawerTab() !== "docs") openDrawer("docs");
-      const { left, bottom } = besideIconColumn();
-      document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
-      document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
-    } else if (drawerTab() === "docs") openDrawer(null);
+    if (open3 && drawerTab() !== "docs") openDrawer("docs");
+    else if (!open3 && drawerTab() === "docs") openDrawer(null);
     if (open3 === reported) return;
     reported = open3;
     send({ type: "docs", open: open3 });

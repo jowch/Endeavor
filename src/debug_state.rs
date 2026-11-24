@@ -593,7 +593,7 @@ impl Workspace {
                 "safe_preview": reported && p.safe,
                 "read_only": self.read_only(s),
                 "connected": !reported || p.connected,
-                "packages": self.packages_feed.sent_for(s.key),
+                "packages": self.packages_feed.latest_for(s.key),
             })
         });
         json!({

@@ -65,14 +65,13 @@ function endSidebarDrag(): void {
 function follow() {
   if (sidebarDragging()) endSidebarDrag();
   if (moving) return;
+  const { left, bottom } = besideIconColumn();
+  const root = document.documentElement.style;
+  if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
+  if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
   const open = docsShown();
-  if (open) {
-    if (drawerTab() !== "docs") openDrawer("docs");
-    const { left, bottom } = besideIconColumn();
-    document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
-    document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
-  }
-  else if (drawerTab() === "docs") openDrawer(null);
+  if (open && drawerTab() !== "docs") openDrawer("docs");
+  else if (!open && drawerTab() === "docs") openDrawer(null);
   if (open === reported) return;
   reported = open;
   send({ type: "docs", open });
