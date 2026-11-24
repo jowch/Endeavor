@@ -326,11 +326,17 @@ fn ember_logo() -> impl IntoElement {
     div().relative().size(px(10.)).flex_shrink_0().children([dot(7., 0., 3.), dot(2.5, 6.5, 1.), dot(1.5, 8.5, 0.)])
 }
 
+fn marimo_logo() -> impl IntoElement {
+    let marimo = rgb(if crate::theme::is_light() { 0x1c7361 } else { 0x3fa58c });
+    let ring = |size: f32, left: f32, top: f32| div().absolute().left(px(left)).top(px(top)).size(px(size)).rounded_full().border(px(1.)).border_color(marimo);
+    div().relative().size(px(10.)).flex_shrink_0().children([ring(10., 0., 0.), ring(8.5, 0.5, 1.)])
+}
+
 fn engine_logo(kind: Backend) -> AnyElement {
     match kind {
         Backend::Pluto => pluto_logo().into_any_element(),
         Backend::Ember => ember_logo().into_any_element(),
-        Backend::Marimo => div().into_any_element(),
+        Backend::Marimo => marimo_logo().into_any_element(),
     }
 }
 
