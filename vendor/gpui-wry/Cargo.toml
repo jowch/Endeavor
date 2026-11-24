@@ -13,5 +13,5 @@ doctest = false
 
 [dependencies]
 anyhow = "1"
-gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui = { package = "gpui-pre", version = "=0.3.14" }
 wry = { version = "0.53.3", package = "lb-wry" }

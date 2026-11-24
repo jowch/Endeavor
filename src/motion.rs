@@ -120,14 +120,6 @@ pub struct Arriving<E> {
     down: bool,
 }
 
-impl<E: IntoElement + Styled + 'static> IntoElement for Arriving<E> {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl<E: IntoElement + Styled + 'static> Element for Arriving<E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();

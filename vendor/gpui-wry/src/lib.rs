@@ -1,3 +1,5 @@
+// Modified for Endeavor from gpui-wry 0.6.6: the IntoElement impl for WebViewElement is removed for gpui-pre 0.3.14. See README.md.
+
 use std::{ops::Deref, rc::Rc};
 
 use wry::{
@@ -154,14 +156,6 @@ impl WebViewElement {
         _cx: &mut App,
     ) -> Self {
         Self { view, parent }
-    }
-}
-
-impl IntoElement for WebViewElement {
-    type Element = WebViewElement;
-
-    fn into_element(self) -> Self::Element {
-        self
     }
 }
 
