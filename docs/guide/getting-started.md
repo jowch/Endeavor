@@ -37,6 +37,12 @@ runs R notebooks, and the pane shows each step. On a Mac with no R, the pane
 offers **Install R** first. On Linux, install R yourself, for example with
 [rig](https://github.com/r-lib/rig).
 
+Python notebooks (`.py`, on marimo) work on this computer. uv gets Python and
+each notebook's packages, and the pane shows each step. With no uv, the pane
+offers **Install uv** on a Mac or Linux computer. On Windows, install uv
+yourself first ([uv's installer](https://docs.astral.sh/uv/getting-started/installation/)). A Python notebook shows once you let it run,
+since opening one installs the packages it names.
+
 If a step fails, the window shows which one, with the reason. Click **Retry**
 to try that step again, or **Show logs** to see what happened. If the
 assistant's own step fails, **Choose another assistant** takes you back to

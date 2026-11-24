@@ -14,6 +14,8 @@ use crate::runs;
 use crate::session::{Entry, Scope, Session, cell_label, file_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
+use crate::theme::TabStop as _;
 use crate::transcript::markdown_style;
 
 pub(crate) struct ApprovalView {
@@ -226,7 +228,7 @@ fn view_at(session: &Session, ix: usize) -> Option<ApprovalView> {
     if matches!(tool, "allow_execution" | endeavor_mcp::REQUEST_RESTART) && *runs_code {
         buttons.extend(deny.map(|d| ("Not now".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
-    } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook") && *runs_code {
+    } else if matches!(tool, "approve_install" | "answer_prompt" | "restart_notebook" | "close_notebook" | "apply_package_update") && *runs_code {
         buttons.extend(deny.map(|d| ("Deny".into(), "esc", d.clone(), Scope::Once)));
         buttons.extend(allow.map(|a| (ask.verb.into(), "⏎", a.clone(), Scope::Once)));
     } else if let Some(allow) = allow {
@@ -521,6 +523,7 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
                             .role(Role::Link)
                             .aria_label("Show in notebook")
                             .cursor_pointer()
+                            .tab_stop_on(theme::bg_urgent())
                             .text_color(theme::accent_text())
                             .hover(|s| s.underline())
                             .child("Show in notebook →")
@@ -604,6 +607,10 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
         .border_l_0()
         .border_color(theme::control_edge())
         .cursor_pointer()
+        .focusable()
+        .tab_stop(true)
+        .keeps_keyboard_on_click()
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .hover(|s| s.bg(theme::bg_raised()))
         .when(open, |d| d.bg(theme::bg_raised()))
         .child(glyph(Glyph::Chevron, theme::text_muted()))
@@ -621,6 +628,7 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
             .py(px(4.))
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_inside()
             .hover(|s| s.bg(theme::menu_hover()))
             .child(label)
             .child(div().text_color(theme::text_faint()).child(hint))
@@ -1131,7 +1139,7 @@ mod tests {
         };
         let safe = waiting("mcp__notebook__allow_execution", json!({ "notebook_id": "n" }));
         assert_eq!(super::command_enter_scope(&safe), Scope::Once, "Let this notebook run? has no Always");
-        for tool in ["mcp__notebook__approve_install", "mcp__notebook__answer_prompt", "mcp__notebook__restart_notebook", "mcp__notebook__close_notebook"] {
+        for tool in ["mcp__notebook__approve_install", "mcp__notebook__answer_prompt", "mcp__notebook__restart_notebook", "mcp__notebook__close_notebook", "mcp__notebook__apply_package_update"] {
             let once = waiting(tool, json!({ "notebook_id": "n", "text": "y" }));
             assert_eq!(super::command_enter_scope(&once), Scope::Once, "{tool} has no Always");
             let view = super::approval_view(&once).unwrap();
@@ -1245,6 +1253,9 @@ mod tests {
         assert_eq!(add.lines.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["Nothing depends on it yet."]);
         assert_eq!(buttons(&add).iter().map(|b| (b.0.as_str(), b.2)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Always this session", Scope::Session), ("Add and run", Scope::Once)]);
         assert!(add.folder.is_none());
+
+        let update = prompt(&mut s, "mcp__notebook__apply_package_update", ToolKind::Other, json!({ "notebook_id": "n", "date": "2026-10-01" }), true, gate());
+        assert_eq!(buttons(&update).iter().map(|b| (b.0.as_str(), b.2)).collect::<Vec<_>>(), vec![("Deny", Scope::Once), ("Update", Scope::Once)]);
 
         let run = prompt(&mut s, "mcp__notebook__execute_cell", ToolKind::Other, json!({ "cell_id": "a" }), true, gate());
         assert_eq!(run.heading, "Run a cell?");

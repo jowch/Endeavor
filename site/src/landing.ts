@@ -1,6 +1,3 @@
-// All the words on the home page. Edit them here; src/pages/index.astro lays them out.
-// `href` values starting with "/" are inside the site and get the /Endeavor base added.
-
 export const meta = {
 	title: 'Endeavor: work through your data with an AI agent in a live notebook',
 	description:
@@ -17,12 +14,10 @@ export const hero = {
 	name: 'Endeavor',
 	tagline: 'Build our future',
 	lead: 'Work through your data with an AI agent in a live Julia or R notebook. Explore, test ideas and learn what it says together, in code that runs the same way every time.',
-	// The nightly release's files keep these names from build to build (.github/workflows/nightly.yml).
 	downloads: [
 		{ text: 'Download for Mac', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-macos-arm64.dmg' },
 		{ text: 'Download for Windows', href: 'https://github.com/jowch/Endeavor/releases/download/nightly/Endeavor-windows-x86_64-setup.exe' },
 	],
-	// In place of a status line, above the buttons. Phones get hero.phone in their place.
 	downloadNote: [
 		'Test builds for Apple silicon Macs and Windows 10 or 11. ',
 		{ text: 'How to install', href: '/install/' },
@@ -30,12 +25,10 @@ export const hero = {
 		{ text: 'build from source', href: 'https://github.com/jowch/Endeavor#build-it' },
 		'.',
 	],
-	// Phones can't run the app, so they get the install guide instead of the downloads.
 	phone: { text: 'Get started', href: '/install/' },
 	primary: { text: 'Read the guide', href: '/overview/' },
 };
 
-// Under the hero and in the footer: the feedback page (src/pages/feedback.astro).
 export const feedback = {
 	text: 'Tell us what got in your way',
 	href: '/feedback/',

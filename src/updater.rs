@@ -83,12 +83,13 @@ pub fn offer(m: &Manifest, commit: &str, committed: &str) -> Option<Offer> {
 pub struct Place {
     pub app: PathBuf,
     pub replaceable: bool,
+    pub protected: bool,
 }
 
 pub fn place() -> Result<Place, &'static str> {
     #[cfg(debug_assertions)]
     if test_manifest().is_some() {
-        return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false });
+        return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false, protected: false });
     }
     if !cfg!(any(target_os = "macos", windows)) {
         return Err("only the Mac and Windows apps update themselves");
@@ -100,11 +101,12 @@ pub fn place() -> Result<Place, &'static str> {
     if cfg!(windows) {
         let app = install_of(&exe).ok_or("can't tell where the app is")?;
         let replaceable = app.join(UNINSTALLER).is_file();
-        return Ok(Place { app, replaceable });
+        return Ok(Place { app, replaceable, protected: false });
     }
     let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
-    let replaceable = app.parent().is_some_and(writable) && writable(&app);
-    Ok(Place { app, replaceable })
+    let folder = app.parent().is_some_and(writable);
+    let own = write_access(&app);
+    Ok(Place { replaceable: folder && own.is_ok(), protected: folder && own == Err(NoWrite::AppManagement), app })
 }
 
 #[cfg(debug_assertions)]
@@ -124,17 +126,35 @@ fn install_of(exe: &Path) -> Option<PathBuf> {
     (bin.file_name()? == "bin").then(|| bin.parent().map(Path::to_owned)).flatten()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum NoWrite {
+    AppManagement,
+    Other,
+}
+
+fn writable(path: &Path) -> bool {
+    write_access(path).is_ok()
+}
+
 #[cfg(not(unix))]
-fn writable(_: &Path) -> bool {
-    false
+fn write_access(_: &Path) -> Result<(), NoWrite> {
+    Err(NoWrite::Other)
 }
 
 #[cfg(unix)]
-fn writable(path: &Path) -> bool {
+fn write_access(path: &Path) -> Result<(), NoWrite> {
     use std::os::unix::ffi::OsStrExt as _;
-    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return Err(NoWrite::Other) };
     // SAFETY: a valid C string.
-    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+    if unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0 {
+        return Ok(());
+    }
+    Err(no_write_for(std::io::Error::last_os_error().raw_os_error()))
+}
+
+#[cfg(unix)]
+fn no_write_for(errno: Option<i32>) -> NoWrite {
+    if errno == Some(libc::EPERM) { NoWrite::AppManagement } else { NoWrite::Other }
 }
 
 const DAILY: Duration = Duration::from_secs(24 * 3600);
@@ -413,7 +433,7 @@ while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 next="$app.next" old="$app.replaced"
 rm -rf "$next" "$old"
 if ditto "$new" "$next" && mv "$app" "$old"; then
-  if mv "$next" "$app"; then rm -rf "$old" "$new"; else mv "$old" "$app"; rm -rf "$next"; : > "$failed"; fi
+  if mv "$next" "$app"; then rm -rf "$old" "$new"; rmdir "${new%/*}" 2>/dev/null; else mv "$old" "$app"; rm -rf "$next"; : > "$failed"; fi
 else
   rm -rf "$next"; : > "$failed"
 fi
@@ -504,6 +524,15 @@ fn run_installer(setup: &Path, commit: &str, dir: &Path, relaunch: bool) -> Resu
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn only_eperm_counts_as_macos_app_management() {
+        assert_eq!(super::no_write_for(Some(libc::EPERM)), super::NoWrite::AppManagement);
+        assert_eq!(super::no_write_for(Some(libc::EACCES)), super::NoWrite::Other);
+        assert_eq!(super::no_write_for(Some(libc::EROFS)), super::NoWrite::Other);
+        assert_eq!(super::no_write_for(None), super::NoWrite::Other);
+    }
+
     use super::*;
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -572,7 +601,7 @@ mod tests {
 
     #[test]
     fn checks_are_daily_and_retried_hourly_after_a_failure() {
-        let place = Place { app: PathBuf::from("/Applications/Endeavor.app"), replaceable: true };
+        let place = Place { app: PathBuf::from("/Applications/Endeavor.app"), replaceable: true, protected: false };
         let mut u = Updater { place: Ok(place.clone()), state: State::Waiting, progress: Arc::default(), last_try: None };
         let t0 = Instant::now();
         assert!(u.due(t0));
@@ -734,6 +763,7 @@ mod tests {
         script.wait().unwrap();
         verify(&installed, &team).unwrap();
         assert!(!failed.exists() && !staged.exists());
+        assert!(!staged.parent().unwrap().exists(), "the staged build's folder goes too (#166)");
         assert!(!apps.join("Endeavor.app.next").exists() && !apps.join("Endeavor.app.replaced").exists());
 
         let image = w.join("small.dmg");

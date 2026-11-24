@@ -1,7 +1,4 @@
 ---
-// The setup window's splash from the app (src/splash.rs and src/turtle.rs), drawn on a canvas.
-// The name and tagline are page text; give them the classes `splash-name` and `splash-tagline`
-// inside the same `.splash-scope` element and they fade up in step with the turtle.
 ---
 
 <canvas class="splash" aria-hidden="true"></canvas>
@@ -46,20 +43,17 @@
 	const TAU = Math.PI * 2;
 	const COLORS = { shell: '#CC3F00', skin: '#E08A5E', eye: '#151517', star: '#F2E6D0' };
 
-	// Turtle geometry in shell radii (src/turtle.rs).
 	const HEAD_R = 0.36;
 	const HEAD_X = 1.02;
 	const HEAD_Y = -0.14;
 	const FOOT_R = 0.21;
 	const FEET_X = [-0.6, 0.4];
 
-	// Timeline in seconds (src/splash.rs).
 	const WALK = 1.6;
 	const GAZE_START = 3.7;
 	const GAZE_MOVE = 0.45;
 	const STILL = 6;
 
-	/** eyeX 1 looks ahead, 0 at the viewer, -1 back; look raises the eye; dx/dy move the head. */
 	type Gaze = { eyeX: number; look: number; dx: number; dy: number };
 
 	const AHEAD: Gaze = { eyeX: 1, look: 0, dx: 0, dy: 0 };
@@ -69,7 +63,6 @@
 	const BACK: Gaze = { eyeX: -1.3, look: 0.35, dx: -0.07, dy: -0.08 };
 	const DOWN: Gaze = { eyeX: 1, look: -0.7, dx: 0.05, dy: 0.07 };
 
-	/** (gaze, seconds held), hand-ordered so it doesn't feel like a metronome. */
 	const GAZES: [Gaze, number][] = [
 		[STARS_GAZE, 4],
 		[AHEAD, 1.6],
@@ -88,7 +81,6 @@
 	];
 	const GAZE_TOTAL = GAZES.reduce((sum, [, hold]) => sum + GAZE_MOVE + hold, 0);
 
-	/** (x, y) from where the turtle stops, in shell radii, and the radius in px at a 60 px shell radius. */
 	const STARS: [number, number, number][] = [
 		[1.5, -2.7, 3.7],
 		[2.4, -2.1, 2.8],
@@ -140,7 +132,6 @@
 		ctx.fill();
 	}
 
-	/** Half an ellipse from angle `from` to `from + PI`; y points down, so PI draws the top half. */
 	function halfDisc(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number, from: number, color: string) {
 		ctx.fillStyle = color;
 		ctx.beginPath();
@@ -149,7 +140,6 @@
 		ctx.fill();
 	}
 
-	/** The turtle standing with its feet on the ground at (gx, gy), facing right, shell radius r. */
 	function paintTurtle(ctx: CanvasRenderingContext2D, gx: number, gy: number, r: number, p: Pose) {
 		FEET_X.forEach((fx, i) => {
 			const [dx, dy] = p.feet[i];
@@ -217,7 +207,6 @@
 			draw();
 		};
 		const tick = (now: number) => {
-			// A long gap means the frame callbacks were held back; carry on from where it stopped.
 			t += Math.min(0.1, (now - last) / 1000);
 			last = now;
 			draw();

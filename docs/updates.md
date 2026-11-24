@@ -16,7 +16,8 @@ image, a Windows build unzipped by hand), the newer build is offered as a
 download instead.
 
 The manifest names each build by its commit and its committer time, written
-as `2026-10-15T08:12:00Z` on both sides so two times compare as strings.
+as `2026-10-15T08:12:00Z` on both sides (`build.rs` and the manifest
+script's `COMMITTED`) so two times compare as strings.
 Only a build committed after this one is offered, so a manifest that lags,
 or a build newer than the nightly, never "updates" backwards. A build with no
 recorded time (not from git) never compares newer.

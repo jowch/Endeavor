@@ -1,21 +1,14 @@
-//! Linux's `src/webcontent.rs`: WebKitGTK's web process ending, its find
-//! controller, and whether the web view has the keyboard.
-
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use futures::channel::oneshot;
 use webkit2gtk::{FindControllerExt, FindOptions, WebViewExt};
 
-/// How many matches WebKitGTK looks for; the bar doesn't show the count.
 const MAX_MATCHES: u32 = 1000;
 
 #[derive(Default)]
 struct Finding {
-    /// The text last searched, so the same text goes to the next match.
     text: Option<String>,
-    /// Searches waiting for the find controller's answer, oldest first: it
-    /// answers each search once, in order, and the answer doesn't say which.
     answers: VecDeque<oneshot::Sender<bool>>,
     connected: bool,
 }
@@ -77,7 +70,6 @@ pub fn find(webview: &wry::WebView, text: &str, backwards: bool) -> oneshot::Rec
 
 pub fn clear_find(webview: &wry::WebView) {
     use wry::WebViewExtUnix;
-    // A search finish cuts short may never answer: its waiters go.
     FINDING.with(|f| {
         let mut f = f.borrow_mut();
         f.text = None;
@@ -88,18 +80,15 @@ pub fn clear_find(webview: &wry::WebView) {
     }
 }
 
-/// Give the web view the keyboard.
 pub fn give_keyboard(webview: &wry::WebView) {
     use wry::WebViewExtUnix;
     super::focus_web(&webview.webview());
 }
 
-/// The web view has the keyboard, or had it until the click that opened a menu.
 pub fn had_keyboard(_: &wry::WebView) -> bool {
     super::web_view_had_keyboard()
 }
 
-/// Cut, Copy, Paste or Select All in the page, as its own keys would.
 pub fn edit(webview: &wry::WebView, action: gpui::OsAction) {
     use wry::WebViewExtUnix;
     let command = match action {

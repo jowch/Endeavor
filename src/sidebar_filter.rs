@@ -1,14 +1,9 @@
-//! Filtering, sorting and grouping for the sidebar's session list, kept apart
-//! from rendering so each rule can be checked in a unit test against a
-//! literal expected output, rather than only by looking at the app.
-
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
 use crate::hosts::{HostId, Place};
 
-/// The sidebar's Status filter: replaces the old `show_archived` bool.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusFilter {
@@ -30,7 +25,6 @@ impl StatusFilter {
     }
 }
 
-/// Whether a row passes the Status filter.
 pub fn status_matches(status: StatusFilter, archived: bool) -> bool {
     match status {
         StatusFilter::Active => !archived,
@@ -39,12 +33,10 @@ pub fn status_matches(status: StatusFilter, archived: bool) -> bool {
     }
 }
 
-/// Whether a host passes the Where filter; an empty set means "All places".
 pub fn where_matches(hosts: &HashSet<HostId>, host: &HostId) -> bool {
     hosts.is_empty() || hosts.contains(host)
 }
 
-/// The Where filter's right-aligned value: "All", a single host's name, or "N selected".
 pub fn where_label(hosts: &HashSet<HostId>, name_of: impl Fn(&HostId) -> String) -> String {
     match hosts.len() {
         0 => "All".to_string(),
@@ -53,7 +45,6 @@ pub fn where_label(hosts: &HashSet<HostId>, name_of: impl Fn(&HostId) -> String)
     }
 }
 
-/// How the sidebar's folders are grouped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupBy {
@@ -75,21 +66,10 @@ impl GroupBy {
     }
 }
 
-/// How the sidebar's sessions are ordered within a folder.
-///
-/// There's no "Date created" here: an open session's first message gives an
-/// honest send time, but a past session (the common case) is only known by
-/// its title and last-activity time (neither the record nor the agent's
-/// listing has a creation time), so a Date-created sort couldn't be honest for most rows. Per the
-/// design brief ("if there's none, leave Date created out and say so"),
-/// it's left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortBy {
     Name,
-    /// Matches today's order: open sessions in their existing order, then
-    /// past sessions newest first, as the record orders them, so this sort
-    /// is a no-op over that order.
     #[default]
     Activity,
 }
@@ -105,15 +85,12 @@ impl SortBy {
     }
 }
 
-/// Sort by name (case-insensitive, stable); `Activity` leaves the order as given.
 pub fn sort_titles<T>(rows: &mut [T], sort: SortBy, title: impl Fn(&T) -> &str) {
     if sort == SortBy::Name {
         rows.sort_by_key(|a| title(a).to_lowercase());
     }
 }
 
-/// Order folders for Group by. `Folder` and `None` keep the given order;
-/// `Where` clusters folders that share a host, in the host order first seen.
 pub fn order_folders(folders: Vec<Place>, group_by: GroupBy) -> Vec<Place> {
     match group_by {
         GroupBy::Folder | GroupBy::None => folders,
@@ -129,8 +106,6 @@ pub fn order_folders(folders: Vec<Place>, group_by: GroupBy) -> Vec<Place> {
     }
 }
 
-/// A case-insensitive substring match on a session's title or its notebook's
-/// file name; an empty query matches everything.
 pub fn row_matches_search(query: &str, title: &str, notebook_name: Option<&str>) -> bool {
     let q = query.trim();
     if q.is_empty() {
@@ -140,12 +115,10 @@ pub fn row_matches_search(query: &str, title: &str, notebook_name: Option<&str>)
     title.to_lowercase().contains(&q) || notebook_name.is_some_and(|n| n.to_lowercase().contains(&q))
 }
 
-/// The saved sidebar filters (settings.rs holds this on `Settings`).
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SidebarFilters {
     pub status: StatusFilter,
-    /// Which hosts to show; empty means "All places".
     pub where_hosts: HashSet<HostId>,
     pub group_by: GroupBy,
     pub sort_by: SortBy,
@@ -153,7 +126,6 @@ pub struct SidebarFilters {
 }
 
 impl SidebarFilters {
-    /// Whether anything differs from the defaults (shows "Clear filters").
     pub fn is_default(&self) -> bool {
         self == &SidebarFilters::default()
     }

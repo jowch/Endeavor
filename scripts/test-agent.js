@@ -1,11 +1,4 @@
 #!/usr/bin/env node
-// test-agent.js: a scripted stand-in for the ACP adapter, for checks on a
-// computer that must not reach a real assistant (a cloud VM, CI). A debug
-// build runs it in place of the adapter when ENDEAVOR_TEST_AGENT is set to
-// this file (docs/testing.md). It answers every prompt with one short line
-// and runs no tools, so it never reads, writes or runs anything. A message
-// with "TOOL <n>" also shows a made-up finished shell call with n lines of
-// output, for checks of the tool call box.
 "use strict";
 
 const readline = require("readline");
@@ -52,8 +45,6 @@ function answer(method, params) {
       return { configOptions: [] };
     case "session/prompt": {
       const text = promptText(params.prompt);
-      // "TOOL <n>" shows a finished shell call with n lines of output, without running
-      // anything, so a check can look at a tool call box.
       const tool = /\bTOOL (\d+)/.exec(text);
       if (tool) showCall(params.sessionId, Number(tool[1]));
       say(params.sessionId, `Stand-in agent: got "${text.slice(0, 200)}". No real assistant answered.`);
@@ -71,7 +62,6 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   } catch {
     return;
   }
-  // Notifications (session/cancel and the like) and our requests' replies need no answer.
   if (message.id === undefined || !message.method) return;
   send({ id: message.id, result: answer(message.method, message.params || {}) });
 });

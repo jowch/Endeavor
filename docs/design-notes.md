@@ -184,7 +184,9 @@ an initialization script, so it captures the secret and webkit's
 `window.ipc` or webkit's handler gets neither. `byUser` accepts only trusted
 events, so a script can't click or type a prompt into being. Tests run with no
 secret and no host, and can't make trusted events, so there `byUser` lets
-them through. `test/bridge.test.mjs` checks all three.
+them through. `test/bridge.test.mjs` checks all three. The app also bounds what
+a message may carry (`annotate.rs`), since notebook output runs in the same page,
+and the user sees every quote before it is sent.
 
 Page to app:
 

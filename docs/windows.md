@@ -120,11 +120,11 @@ Each stub is marked "Not ported" in the code.
 
 **`endeavor-mcp` (the app's local runtime runs it too):**
 
-- `lib.rs`, `ask_to_hand_over`, `watch_replace_signal`, `block_sigusr1`: no
-  handover between clients, so a second client waits for the lock (about 30 s)
-  and fails. Needs a named event, or a "release" call on a loopback port.
-  Locally this matters only if a helper is still running when the app starts
-  again; a helper exits when the app that started it goes away.
+- The handover between clients is gone on every platform: clients attach to
+  the one runtime on a machine instead of taking it over (EndeavorMCP's
+  `docs/endeavor-mcp.md`). What's left of the signal, `lib.rs`'s
+  `block_sigusr1`, only keeps an older build's helper from ending a newer one
+  on Unix; Windows has no such signal and needs nothing in its place.
 - `http.rs`, `wait_readable`: doesn't watch the client, so a client that hangs
   up during an event stream is noticed only when a write to it fails. Needs
   `WSAPoll`.
@@ -294,6 +294,34 @@ own, as on a user's first run. It runs on pull requests that change
 weekly, and by hand. The
 script runs on Linux and macOS too.
 
+`scripts/julia-smoke.py ENDEAVOR [--helper] [--server HOST]` runs it. It
+starts `ENDEAVOR [--helper] mcp` (`--helper` for the app's exe) and fails,
+with what the runtime said, if a step doesn't do what it should. Each step
+may take up to 20 minutes, since a first run starts Julia and installs Pluto
+into the depot. Along the way it behaves as an agent and its user would:
+
+- With `--server`, it tells the server it can show a form (MCP
+  elicitation), so the server asks about installs instead of refusing them,
+  and it answers yes to each.
+- When the answer says Julia is starting, R is installing or the notebook is
+  still opening, it makes the same call again, with a short pause in case
+  one answers at once.
+- It reads the new notebook's one empty cell before editing it, since an
+  edit needs a read first.
+- It reads the cell again until it is neither running nor queued, since the
+  first run precompiles before the cell runs.
+
+With `--server HOST` (an ssh alias), the notebook runs on that server, as
+after the app's "Add server". `windows-server.yml` runs it that way.
+
+- `add_machine` installs Endeavor's program there from the Helpers release.
+  Where the front didn't ask in a dialog itself, the script answers its
+  `needs_install` with `install`, as the app's Install button does.
+- `use_machine` may install Julia there too. Its `starting` is fine, since
+  the notebook tools wait for it.
+- The notebook's path is relative to the session's folder on the server.
+- At the end, it stops Endeavor on the server.
+
 ## What should carry over
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
@@ -336,12 +364,10 @@ This is the largest item. Starting, watching and stopping the runtime is
 written (see [How process control works on
 Windows](#how-process-control-works-on-windows)). Left:
 
-- The handover between clients: the signal (SIGUSR1 on Unix) becomes a named
-  event, or a "release" call on a loopback port.
 - The `poll`/`recv(MSG_PEEK)` calls in `http.rs` and `mcp.rs` need Windows
   versions (stubs, see above).
 
-### ssh from Windows (M if askpass works, L if not)
+### ssh from Windows
 
 - **Askpass transport. Done.** The password and 2FA prompts reach the app over
   loopback TCP with a per-connect token in an environment variable
@@ -349,11 +375,10 @@ Windows](#how-process-control-works-on-windows)). Left:
 - **Connection sharing. Done.** Windows OpenSSH has no ControlMaster, and a
   user's `~/.ssh/config` might turn it on, so EndeavorMCP's ssh command passes
   `-o ControlMaster=no -o ControlPath=none` there.
-- **Open question:** whether the ssh in Windows 10 and 11 honours
-  `SSH_ASKPASS_REQUIRE=force`, including for Duo prompts (the same question
-  as in remote-sessions.md). If it doesn't, the fallbacks are running ssh
-  under a hidden console (ConPTY) or an ssh library in Rust such as `russh`.
-  Either adds about two weeks.
+- **Prompts. Answered.** Windows' OpenSSH 9.5 uses `SSH_ASKPASS` only with
+  `SSH_ASKPASS_REQUIRE=force`, which the ssh command sets, so its password
+  and 2FA prompts reach the app through `client::Asker` like everywhere else.
+  No hidden console or Rust ssh library is needed.
 
 ### Paths (written; tried on Windows with a Linux server)
 
@@ -426,8 +451,10 @@ only with servers.
 - **Snapshot (S–M).** Use `CapturePreview` and crop, or the DevTools
   `Page.captureScreenshot` with a clip.
 - **Small items (S).**
-  - Reduce motion: `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`.
-  - Open a URL: `ShellExecute`.
+  - Reduce motion: done, "Animation effects" with
+    `SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION)`, watched through
+    `WM_SETTINGCHANGE` on a hidden window (`src/platform.rs`).
+  - Open a URL: done, with `ShellExecuteW` (`src/signin.rs`).
   - Set a WebView2 data folder: the default, next to the exe, isn't writable
     under Program Files.
 - **Custom scheme: written, untried.** wry serves `endeavor://` as
@@ -445,13 +472,13 @@ only with servers.
   hand in cmd or PowerShell (for example with `--helper` while debugging),
   `endeavor.exe` returns to the prompt at once and prints nothing there; pipe
   its output (`2>&1 | Out-Host`) to see it.
-- **Network-change watch (S).** Only macOS and Linux versions exist
-  (`src/network.rs`). Windows: `NotifyIpInterfaceChange` or
-  `INetworkListManager`.
+- **Network-change watch: done.** `src/network.rs` listens with
+  `NotifyIpInterfaceChange` and `NotifyRouteChange2`, and counts the network
+  as up while a default route sits on an interface that is up.
 - **Title bar: native for now.** Windows keeps its own title bar, with the
   window's buttons, above the column headers. Drawing the buttons in the
   sidebar's header instead (GPUI's `WindowControlArea`) would save its height.
-- **Wording (S).** "This Mac" (about 60 places in `src/`), "Reveal in Finder", and
+- **Wording (S).** "This Mac" (73 places in `src/` on 2026-11-23), "Reveal in Finder", and
   `HostId::ThisMac`. This is shared with Linux; see
   [linux.md](linux.md#remaining-work-ranked).
 - **Cargo (S).** The stubs left will need more of `windows-sys`' features.
@@ -504,6 +531,38 @@ open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
 --stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
 Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
 `%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
+
+### How the installer works
+
+`scripts/installer.iss` is an Inno Setup 6 script, built by `windows.yml`
+from the package layout (`ISCC /DVersion=… /DBuild=<commit> /DDist=<folder
+holding Endeavor\> /DWebView2Setup=<bootstrapper> scripts\installer.iss`). It
+installs per user and is never elevated (`{autopf}` is
+`%LOCALAPPDATA%\Programs`), and WebView2's bootstrapper then installs for this
+user too.
+
+- **Quitting the app first.** The app holds a named mutex while it's open
+  (`platform::init`), and the installer waits for it before stopping the
+  app's runtime, which runs from `bin\endeavor.exe` and holds it open.
+  Restart Manager can't close a runtime (it has no window). An update the
+  app started (`/UPDATE`) runs as the app quits, so it waits up to 30 seconds
+  rather than asking; run silently after that, the answer is Cancel and the
+  install stops with the old app in place. The runtime is stopped again just
+  before files are copied, in case an Endeavor started in between. Setup's
+  own close of running programs is the fallback for one opened after that,
+  and isn't reopened. Silent, it would close any program holding a file
+  without asking, so the app's updates pass `/NOCLOSEAPPLICATIONS`.
+- **Resources is replaced whole**, so a file the new version dropped can't
+  linger. The old one is moved aside first rather than deleted: an install
+  that stops partway (a file held open, say) puts it back and the old app
+  still works, and the move fails at once, before anything changed, when
+  something holds a file in it. Only a `Resources.old` this run moved is put
+  back, since one left by an earlier run is older than the one in use.
+- **Restart.** An update the app started with Restart opens the new app
+  afterwards, and if the install didn't finish, opens the old one again so
+  the user isn't left with nothing (not when it is still open).
+- **Uninstalling** stops the runtime after the "Are you sure?" question, since
+  an open exe can't be removed, and leaves `%LOCALAPPDATA%\Endeavor`.
 
 ## Try a build from CI
 
@@ -591,17 +650,14 @@ test binary as its own stand-in core.
 
 ## Risks, ranked
 
-1. **ssh prompts.** Whether Windows OpenSSH shows askpass prompts decides
-   whether ssh work takes days or weeks. Test this first, on a real Windows 11
-   machine, against a server with Duo.
-2. **Process control.** Getting the Job Object and detaching right so that
+1. **Process control.** Getting the Job Object and detaching right so that
    Pluto workers never leak, and handling pid reuse.
-3. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
+2. **Menus over the notebook.** The `SetWindowRgn` hole is untested with how
    GPUI draws (a plain window swap chain, since DirectComposition is off).
    Hiding the web view is the fallback.
-4. **GPUI's Windows backend is new.** It looks complete, but it has had
+3. **GPUI's Windows backend is new.** It looks complete, but it has had
    little use, and Zed doesn't embed a child window the way Endeavor does.
-5. **Claude Code's shell requirements** on Windows.
+4. **Claude Code's shell requirements** on Windows.
 
 ## Suggested order
 
@@ -609,7 +665,7 @@ test binary as its own stand-in core.
    [Status](#status-it-builds-with-stubs)).
 2. Run a local notebook: process control, downloads, paths. **Written,
    untried**: the list above on a real machine.
-3. Test ssh askpass on Windows 11. The result sets the size of the ssh work.
+3. ssh askpass on Windows: **answered** (it works with `SSH_ASKPASS_REQUIRE=force`).
 4. Notebook view: shortcuts, menus, snapshot.
 5. Smaller fixes and tests (CI is done).
 6. Installer and signing.

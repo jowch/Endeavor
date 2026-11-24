@@ -62,9 +62,12 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
     rpc(bridge, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
-    let kind = crate::new_session::kind_name(kind);
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind })).map(|_| ())
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_session_folder", session_folder_params(owner, folder, kind, host)).map(|_| ())
+}
+
+fn session_folder_params(owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> serde_json::Value {
+    json!({ "owner": owner.to_string(), "folder": folder, "kind": crate::new_session::kind_name(kind), "shows_python": crate::new_session::shows_python(host) })
 }
 
 pub fn set_folder(bridge: &Bridge, dir: &str) -> Result<(), String> {
@@ -94,6 +97,15 @@ pub fn engine_ended(event: &serde_json::Value) -> Vec<(String, String, String, u
 }
 
 pub type Endings = std::collections::HashSet<(String, u64)>;
+
+pub fn waits_to_run(notebooks: &serde_json::Value, path: &str) -> bool {
+    notebooks.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == false)
+}
+
+pub fn newly_allowed(before: &serde_json::Value, after: &serde_json::Value) -> Vec<String> {
+    let allowed = |list: &serde_json::Value, path: &str| list.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["execution_allowed"] == true);
+    after.as_array().into_iter().flatten().filter_map(|nb| nb["path"].as_str()).filter(|path| waits_to_run(before, path) && allowed(after, path)).map(str::to_owned).collect()
+}
 
 pub fn new_endings(last: &Endings, event: &serde_json::Value) -> (Vec<(String, String, String)>, Endings) {
     let ended = engine_ended(event);
@@ -251,6 +263,19 @@ pub fn r_installing(error: &str) -> Option<&str> {
     Some(step.split_once(", which").map_or(step, |(step, _)| step).trim())
 }
 
+pub fn python_installing(error: &str) -> Option<&str> {
+    let step = error.strip_prefix("python_installing::")?;
+    Some(step.split([',', '(']).next().unwrap_or(step).trim())
+}
+
+pub fn python_failed(error: &str) -> Option<&str> {
+    error.strip_prefix("python_failed::").or_else(|| error.strip_prefix("python_not_found::")).map(str::trim)
+}
+
+pub fn allow_uv_install(bridge: &Bridge) -> Result<(), String> {
+    app_call(bridge, "endeavor/allow_uv_install", json!({})).map(|_| ())
+}
+
 pub const OPENING: &str = "Opening the notebook";
 
 const OPENING_LIMIT: Duration = Duration::from_secs(600);
@@ -279,7 +304,7 @@ fn until_julia_within<T>(mut call: impl FnMut() -> Result<T, String>, step: &dyn
     let mut opening_since = None;
     loop {
         match call() {
-            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| notebook_opening(&e)) {
+            Err(e) => match julia_starting(&e).or_else(|| r_installing(&e)).or_else(|| python_installing(&e)).or_else(|| notebook_opening(&e)) {
                 Some(doing) => {
                     if notebook_opening(&e).is_some() {
                         if opening_since.get_or_insert_with(std::time::Instant::now).elapsed() >= limit {
@@ -553,6 +578,19 @@ pub fn cells_that_ran(old: &Value, new: &Value) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_python_page_loads_once_its_notebook_may_run() {
+        let preview = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": false }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        let running = serde_json::json!([{ "path": "/w/fit.py", "execution_allowed": true }, { "path": "/w/a.jl", "execution_allowed": true }]);
+        assert!(super::waits_to_run(&preview, "/w/fit.py"));
+        assert!(!super::waits_to_run(&running, "/w/fit.py"));
+        assert!(!super::waits_to_run(&preview, "/w/other.py"), "a notebook the runtime doesn't list isn't waiting");
+        assert_eq!(super::newly_allowed(&preview, &running), ["/w/fit.py"]);
+        assert!(super::newly_allowed(&running, &running).is_empty(), "already running: no reload");
+        assert!(super::newly_allowed(&serde_json::Value::Null, &running).is_empty(), "opened straight into running");
+    }
+
     use super::*;
 
     #[test]
@@ -652,6 +690,27 @@ mod tests {
         assert_eq!(until_julia(|| super::answer(answers.borrow_mut().pop().unwrap()), &|_| {}), Ok(json!({ "ran": true })));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
+    }
+
+    #[test]
+    fn only_this_computers_sessions_say_they_show_python() {
+        let here = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::ThisMac);
+        assert_eq!(here["shows_python"], true);
+        assert_eq!((here["owner"].as_str(), here["kind"].as_str()), (Some("7"), Some("python")));
+        let server = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::Server("lab".into()));
+        assert_eq!(server["shows_python"], false);
+    }
+
+    #[test]
+    fn until_julia_waits_while_python_notebooks_set_up_and_names_the_step() {
+        let answers = std::cell::RefCell::new(vec![
+            Ok(9),
+            Err("python_installing::Downloading uv 0.11.32 for Python notebooks (4 seconds so far). Make the same call again right away: each call waits up to 30 seconds.".to_owned()),
+            Err("python_installing::Setting up Python notebooks: uv is getting Python and marimo, which can take a few minutes the first time (2 seconds so far).".to_owned()),
+        ]);
+        let heard = std::cell::RefCell::new(Vec::new());
+        assert_eq!(until_julia(|| answers.borrow_mut().pop().unwrap(), &|step| heard.borrow_mut().push(step.to_owned())), Ok(9));
+        assert_eq!(*heard.borrow(), ["Setting up Python notebooks: uv is getting Python and marimo", "Downloading uv 0.11.32 for Python notebooks"]);
     }
 
     #[test]

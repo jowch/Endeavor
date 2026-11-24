@@ -22,6 +22,16 @@
 
   // src/engine.ts
   var onEmber = () => location.pathname.startsWith("/ember/");
+  var onMarimo = () => location.pathname.startsWith("/marimo/");
+  var pluto = { cell: "pluto-cell", input: "pluto-input", output: "pluto-output", selected: "pluto-cell.selected", id: (cell) => cell.id };
+  var marimo = {
+    cell: ".marimo-cell[data-cell-id]",
+    input: "[data-testid=cell-editor]",
+    output: ".output-area[data-cell-role=output]",
+    selected: ":not(*)",
+    id: (cell) => cell.getAttribute("data-cell-id") ?? ""
+  };
+  var dom = () => onMarimo() ? marimo : pluto;
 
   // src/keys.ts
   var mac = /Mac/.test(navigator.platform);
@@ -54,7 +64,7 @@
     setTimeout(() => note.remove(), 2600);
   }
   function cellCode(cell) {
-    const content = cell?.querySelector("pluto-input .cm-content");
+    const content = cell?.querySelector(`${dom().input} .cm-content`);
     const view = content?.cmTile?.root?.view;
     if (view) return view.state.doc.toString();
     const lines = content ? [...content.querySelectorAll(".cm-line")].map((l) => l.textContent ?? "") : [];
@@ -464,7 +474,7 @@
   var last = null;
   var model = null;
   var lastSent = "";
-  var context = { host: "This Mac", agent: "Claude", asking: false, crash: null };
+  var context = { host: "This Mac", agent: "Claude", asking: false, crash: null, notebook: "" };
   var drawerOf = () => null;
   function onNotebook(listener) {
     listeners.push(listener);
@@ -473,7 +483,7 @@
   function current() {
     return last && model ? { nb: last, model } : null;
   }
-  var notebookId = () => new URLSearchParams(location.search).get("id") ?? "";
+  var notebookId = () => new URLSearchParams(location.search).get("id") ?? context.notebook;
   function setDrawerSource(source) {
     drawerOf = source;
   }
@@ -530,6 +540,7 @@
       context.agent = msg.agent ?? "Claude";
       context.asking = msg.asking;
       context.crash = msg.crash ?? null;
+      context.notebook = msg.notebook ?? "";
       if (last && model) listeners.forEach((l) => l(last, model));
     });
     lastSent = "";
@@ -867,23 +878,22 @@
     return `${cellName(pick2.code)} \xB7 ${part}`;
   }
   function sendQuote(picks, comment, add, ref) {
-    const notebook2 = new URLSearchParams(location.search).get("id");
-    send({ type: "quote", notebook: notebook2, picks, comment, add, ...ref === void 0 ? {} : { ref } });
+    send({ type: "quote", notebook: notebookId(), picks, comment, add, ...ref === void 0 ? {} : { ref } });
   }
   function initQuote() {
     on("shot", (msg) => waiting2.get(msg.id)?.());
   }
 
   // src/annotate.ts
-  var css5 = `
-  body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
+  var css5 = () => `
+  body.annotating ${dom().cell}:hover, body.annotating ${dom().cell} :hover { cursor: crosshair !important; }
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
-  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
-  body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
+  body.annotate-numbers ${dom().input} .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
+  body.annotate-numbers ${dom().input} .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
+  body.annotating ${dom().input} .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
   #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
     background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
   body.annotating #annotate-tag.shown { display: block; }
@@ -913,18 +923,18 @@
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
-  body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
+  body.annotating.${SHOOTING} ${dom().input} .cm-line.annotate-line { background: none; }
 `;
   var DRAG = 4;
   var FIGURE = "img, svg, canvas, video";
   var PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
   var TREE = "pluto-tree, table.pluto-table";
   function targetAt(el2) {
-    const cell = el2?.closest("pluto-cell");
+    const cell = el2?.closest(dom().cell);
     if (!el2 || !cell) return null;
-    const input = el2.closest("pluto-input");
+    const input = el2.closest(dom().input);
     if (input) return { part: "code", cell, el: input };
-    const output = el2.closest("pluto-output");
+    const output = el2.closest(dom().output);
     if (!output) return { part: "cell", cell, el: cell };
     let figure = el2.closest(FIGURE);
     while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest(FIGURE);
@@ -949,7 +959,7 @@
     right: r.right + window.scrollX,
     bottom: r.bottom + window.scrollY
   });
-  var cmLines = (cell) => [...cell.querySelectorAll("pluto-input .cm-line")];
+  var cmLines = (cell) => [...cell.querySelectorAll(`${dom().input} .cm-line`)];
   function pickStatus(picks) {
     if (picks.length > 1) return `${picks.length} picks`;
     const pick2 = picks[0];
@@ -988,9 +998,9 @@
     const picks = [];
     let hover = null;
     const active = () => document.body.classList.contains("annotating");
-    const cells = () => [...document.querySelectorAll("pluto-cell")];
+    const cells = () => [...document.querySelectorAll(dom().cell)];
     const style2 = document.createElement("style");
-    style2.textContent = css5;
+    style2.textContent = css5();
     const frame2 = document.createElement("div");
     frame2.id = "annotate-frame";
     const box = document.createElement("div");
@@ -1074,20 +1084,20 @@
       const code = cellCode(cell);
       switch (target.part) {
         case "cell":
-          return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
+          return { pick: { part: "cell", cell: dom().id(cell), code }, el: el2 };
         case "code":
-          return { pick: { part: "cell", cell: cell.id, code }, el: el2 };
+          return { pick: { part: "cell", cell: dom().id(cell), code }, el: el2 };
         case "output":
-          return { pick: { part: "output", cell: cell.id, code, text: (el2.innerText ?? el2.textContent ?? "").trim() || widgetValues(el2) }, el: el2 };
+          return { pick: { part: "output", cell: dom().id(cell), code, text: (el2.innerText ?? el2.textContent ?? "").trim() || widgetValues(el2) }, el: el2 };
         case "figure":
-          return { pick: { part: "figure", cell: cell.id, code }, el: el2 };
+          return { pick: { part: "figure", cell: dom().id(cell), code }, el: el2 };
       }
     }
     function linesPick(cell, from, to) {
       const [first, last2] = [Math.min(from, to), Math.max(from, to)];
       const code = cellCode(cell);
       const text2 = code.split("\n").slice(first - 1, last2).join("\n");
-      return { pick: { part: "lines", cell: cell.id, code, lines: [first, last2], text: text2 }, lines: cmLines(cell).slice(first - 1, last2) };
+      return { pick: { part: "lines", cell: dom().id(cell), code, lines: [first, last2], text: text2 }, lines: cmLines(cell).slice(first - 1, last2) };
     }
     function set(enable) {
       if (enable === active()) return;
@@ -1097,7 +1107,7 @@
       drag = null;
       showHover(null);
       if (enable) {
-        for (const c of document.querySelectorAll("pluto-cell.selected")) picks.push(targetPick({ part: "cell", cell: c, el: c }));
+        for (const c of document.querySelectorAll(dom().selected)) picks.push(targetPick({ part: "cell", cell: c, el: c }));
         text.focus();
       }
       refresh2();
@@ -1143,7 +1153,7 @@
       e.stopPropagation();
       const m = e;
       if (e.type === "mousedown" && m.button === 0) {
-        const cell = target.closest("pluto-cell");
+        const cell = target.closest(dom().cell);
         const line = cell && !m.altKey ? lineAt(target, cell) : 0;
         drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, moved: false, add: m.shiftKey, lines: line ? { cell, from: line, to: line } : void 0 };
       }
@@ -1194,7 +1204,7 @@
           const r = pageBox(c.getBoundingClientRect());
           return drawn.left < r.right && r.left < drawn.right && drawn.top < r.bottom && r.top < drawn.bottom;
         });
-        choose({ pick: { part: "box", cells: under.map((c) => c.id) }, box: drawn }, done.add);
+        choose({ pick: { part: "box", cells: under.map(dom().id) }, box: drawn }, done.add);
       },
       true
     );
@@ -2626,6 +2636,46 @@ ${text.value}` : sent.comment;
     onRedraw(update);
   }
 
+  // src/outofstep.ts
+  var PLUTO_OUT_OF_STEP_TEXTS = [
+    "Oopsie!! please refresh your browser and everything will be alright!",
+    "\u0639\u0630\u0631\u0627\u064B!! \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u062A\u0635\u0641\u062D \u0648\u0633\u064A\u0639\u0648\u062F \u0643\u0644 \u0634\u064A\u0621 \u0625\u0644\u0649 \u0645\u0633\u0627\u0631\u0647!",
+    "\u54CE\u5440\uFF01\uFF01\u8BF7\u5237\u65B0\u60A8\u7684\u6D4F\u89C8\u5668\uFF0C\u4E00\u5207\u90FD\u4F1A\u597D\u8D77\u6765\u7684\uFF01",
+    "Jejda!! Obnov, pros\xEDm, prohl\xED\u017Ee\u010D a v\u0161echno bude v po\u0159\xE1dku!",
+    "Ups!! Genindl\xE6s venligst din browser, s\xE5 skal det nok g\xE5!",
+    "Hoppla!! Bitte aktualisiere deinen Browser und alles wird in Ordnung sein!",
+    "\u039F\u03C5\u03C0\u03C2!! \u03C0\u03B1\u03C1\u03B1\u03BA\u03B1\u03BB\u03CE \u03B1\u03BD\u03B1\u03BD\u03B5\u03CE\u03C3\u03C4\u03B5 \u03C4\u03BF\u03BD \u03C0\u03B5\u03C1\u03B9\u03B7\u03B3\u03B7\u03C4\u03AE \u03C3\u03B1\u03C2 \u03BA\u03B1\u03B9 \u03CC\u03BB\u03B1 \u03B8\u03B1 \u03B5\u03AF\u03BD\u03B1\u03B9 \u03B5\u03BD\u03C4\u03AC\u03BE\u03B5\u03B9!",
+    "\xA1\xA1Ups!! por favor refresca tu navegador y todo estar\xE1 bien!",
+    "Oups !! Merci d'actualiser ton navigateur et tout ira bien !",
+    "Ops!! per favore aggiorna il tuo browser e tutto andr\xE0 bene!",
+    "Oops!! last inn nettleseren din p\xE5 nytt s\xE5 blir alt i orden!",
+    "\u0627\u06CC \u0648\u0627\u06CC!! \u0644\u0637\u0641\u0627\u064B \u0645\u0631\u0648\u0631\u06AF\u0631 \u062E\u0648\u062F \u0631\u0627 \u0628\u0627\u0632\u062E\u0648\u0627\u0646\u06CC \u06A9\u0646\u06CC\u062F\u060C \u0647\u0645\u0647 \u0686\u06CC\u0632 \u062F\u0631\u0633\u062A \u062E\u0648\u0627\u0647\u062F \u0634\u062F!",
+    "Upsss! Prosz\u0119 od\u015Bwie\u017Cy\u0107 stron\u0119 i wszystko powinno by\u0107 dobrze!",
+    "Oopsie!! Atualiza o teu navegador e tudo ficar\xE1 bem!",
+    "\u0423\u043F\u0441!! \u043F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u0431\u0440\u0430\u0443\u0437\u0435\u0440, \u0438 \u0432\u0441\u0451 \u0431\u0443\u0434\u0435\u0442 \u0445\u043E\u0440\u043E\u0448\u043E!",
+    "Hups! P\xE4ivit\xE4 selain ja kaikki on taas kunnossa!"
+  ];
+  function isOutOfStep(message) {
+    return PLUTO_OUT_OF_STEP_TEXTS.includes(String(message ?? "").trim());
+  }
+  function wrapAlert(w, ask) {
+    const shown2 = w.alert;
+    let asked3 = false;
+    w.alert = function(message) {
+      if (isOutOfStep(message)) {
+        if (!asked3) {
+          asked3 = true;
+          ask();
+        }
+        return;
+      }
+      return shown2.call(this, message);
+    };
+  }
+  function initOutOfStep() {
+    wrapAlert(window, () => send({ type: "out_of_step" }));
+  }
+
   // src/safe.ts
   var css15 = `
   #endeavor-safe { display: none; }
@@ -2982,11 +3032,14 @@ footer form#feedback { display: none !important; }
 }`;
     }).join("");
   }
-  function initTheme(fontsFrom = "app") {
+  function initTokens() {
     const tokenSheet = document.createElement("style");
     tokenSheet.id = "endeavor-tokens";
     tokenSheet.textContent = tokens;
     document.head.append(tokenSheet);
+  }
+  function initTheme(fontsFrom = "app") {
+    initTokens();
     const fonts = document.createElement("style");
     fonts.id = "endeavor-fonts";
     fonts.textContent = juliaMonoFaces(fontsFrom);
@@ -3002,9 +3055,34 @@ footer form#feedback { display: none !important; }
     if (onEmber()) syncTheme();
   }
 
+  // src/reconnected.ts
+  var RESUMED_ON_OPEN = "You have reconnected to an existing session.";
+  function dismissResumedBanners(root) {
+    for (const remove of root.querySelectorAll("[data-testid=remove-banner-button]")) {
+      const banner = remove.parentElement?.parentElement;
+      if (banner?.textContent?.includes(RESUMED_ON_OPEN)) remove.click();
+    }
+  }
+  function initDismissResumedBanner() {
+    dismissResumedBanners(document);
+    new MutationObserver(() => dismissResumedBanners(document)).observe(document.body, { childList: true, subtree: true });
+  }
+
   // src/main.ts
-  function init() {
+  function initOnMarimo() {
     initState();
+    initTokens();
+    initQuote();
+    initAskBox();
+    initAnnotate();
+    initDismissResumedBanner();
+    initDebug();
+    send({ type: "ready" });
+  }
+  function init() {
+    if (onMarimo()) return initOnMarimo();
+    initState();
+    initOutOfStep();
     initTheme();
     initQuote();
     initAskBox();
