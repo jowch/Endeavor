@@ -1,5 +1,6 @@
 import { on, send } from "./bridge";
 import { cellName } from "./cellname";
+import { notebookId } from "./state";
 
 export type Box = { left: number; top: number; right: number; bottom: number };
 
@@ -51,8 +52,7 @@ export function pickSource(pick: Pick): string {
 }
 
 export function sendQuote(picks: Pick[], comment: string, add: boolean, ref?: number): void {
-  const notebook = new URLSearchParams(location.search).get("id");
-  send({ type: "quote", notebook, picks, comment, add, ...(ref === undefined ? {} : { ref }) });
+  send({ type: "quote", notebook: notebookId(), picks, comment, add, ...(ref === undefined ? {} : { ref }) });
 }
 
 export function initQuote(): void {

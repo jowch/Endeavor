@@ -294,6 +294,34 @@ own, as on a user's first run. It runs on pull requests that change
 weekly, and by hand. The
 script runs on Linux and macOS too.
 
+`scripts/julia-smoke.py ENDEAVOR [--helper] [--server HOST]` runs it. It
+starts `ENDEAVOR [--helper] mcp` (`--helper` for the app's exe) and fails,
+with what the runtime said, if a step doesn't do what it should. Each step
+may take up to 20 minutes, since a first run starts Julia and installs Pluto
+into the depot. Along the way it behaves as an agent and its user would:
+
+- With `--server`, it tells the server it can show a form (MCP
+  elicitation), so the server asks about installs instead of refusing them,
+  and it answers yes to each.
+- When the answer says Julia is starting, R is installing or the notebook is
+  still opening, it makes the same call again, with a short pause in case
+  one answers at once.
+- It reads the new notebook's one empty cell before editing it, since an
+  edit needs a read first.
+- It reads the cell again until it is neither running nor queued, since the
+  first run precompiles before the cell runs.
+
+With `--server HOST` (an ssh alias), the notebook runs on that server, as
+after the app's "Add server". `windows-server.yml` runs it that way.
+
+- `add_machine` installs Endeavor's program there from the Helpers release.
+  Where the front didn't ask in a dialog itself, the script answers its
+  `needs_install` with `install`, as the app's Install button does.
+- `use_machine` may install Julia there too. Its `starting` is fine, since
+  the notebook tools wait for it.
+- The notebook's path is relative to the session's folder on the server.
+- At the end, it stops Endeavor on the server.
+
 ## What should carry over
 
 - **GPUI** has a Windows backend: `gpui-pre-platform` 0.3.6 depends on
@@ -503,6 +531,38 @@ open, then stops a runtime kept running after Endeavor quit (`endeavor.exe
 --stop-runtime`), since that runtime runs from the installed `endeavor.exe`.
 Its notebooks are already saved. Uninstalling does the same. Uninstalling leaves
 `%LOCALAPPDATA%\Endeavor` (Julia, the agents, sessions and settings).
+
+### How the installer works
+
+`scripts/installer.iss` is an Inno Setup 6 script, built by `windows.yml`
+from the package layout (`ISCC /DVersion=… /DBuild=<commit> /DDist=<folder
+holding Endeavor\> /DWebView2Setup=<bootstrapper> scripts\installer.iss`). It
+installs per user and is never elevated (`{autopf}` is
+`%LOCALAPPDATA%\Programs`), and WebView2's bootstrapper then installs for this
+user too.
+
+- **Quitting the app first.** The app holds a named mutex while it's open
+  (`platform::init`), and the installer waits for it before stopping the
+  app's runtime, which runs from `bin\endeavor.exe` and holds it open.
+  Restart Manager can't close a runtime (it has no window). An update the
+  app started (`/UPDATE`) runs as the app quits, so it waits up to 30 seconds
+  rather than asking; run silently after that, the answer is Cancel and the
+  install stops with the old app in place. The runtime is stopped again just
+  before files are copied, in case an Endeavor started in between. Setup's
+  own close of running programs is the fallback for one opened after that,
+  and isn't reopened. Silent, it would close any program holding a file
+  without asking, so the app's updates pass `/NOCLOSEAPPLICATIONS`.
+- **Resources is replaced whole**, so a file the new version dropped can't
+  linger. The old one is moved aside first rather than deleted: an install
+  that stops partway (a file held open, say) puts it back and the old app
+  still works, and the move fails at once, before anything changed, when
+  something holds a file in it. Only a `Resources.old` this run moved is put
+  back, since one left by an earlier run is older than the one in use.
+- **Restart.** An update the app started with Restart opens the new app
+  afterwards, and if the install didn't finish, opens the old one again so
+  the user isn't left with nothing (not when it is still open).
+- **Uninstalling** stops the runtime after the "Are you sure?" question, since
+  an open exe can't be removed, and leaves `%LOCALAPPDATA%\Endeavor`.
 
 ## Try a build from CI
 

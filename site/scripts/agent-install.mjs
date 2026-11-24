@@ -1,10 +1,3 @@
-// Copies the "Installing with an agent?" block (site/agent-install.md) into
-// the files that show it, between the agent-install markers. The landing page
-// and llms.txt read the file itself when the site builds.
-//
-//   node scripts/agent-install.mjs            write the copies in this repo
-//   node scripts/agent-install.mjs --check    fail if a copy differs (npm run build runs this)
-//   node scripts/agent-install.mjs PATH...    also write PATH, such as ../../EndeavorMCP/README.md
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 

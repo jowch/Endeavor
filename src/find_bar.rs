@@ -1,36 +1,25 @@
-//! Find in the notebook: ⌘F while the notebook has the keyboard opens a bar
-//! under the notebook header, which searches the page with WebKit's own find
-//! (it selects each match and scrolls to it). ⏎ and ⌘G go to the next match,
-//! ⇧⏎ and ⇧⌘G to the previous one, and Esc closes the bar.
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::new_session::{Glyph, glyph};
 use crate::{Workspace, theme, webcontent};
+use crate::theme::TabStop as _;
 
 pub struct FindBar {
     pub input: Entity<InputState>,
-    /// Whether the last search found a match; None before one, and for an empty box.
     pub found: Option<bool>,
-    /// Bumped per search, so an older search's answer is dropped.
     search: u64,
 }
 
-/// What the bar says after the box: nothing until a search has an answer,
-/// then "No matches" when there's none. WebKit's find gives no count.
 pub fn result_text(found: Option<bool>) -> Option<&'static str> {
     (found == Some(false)).then_some("No matches")
 }
 
-/// The keys, at the bar's right, while there's text and something matches.
 pub const KEYS: &str = "↩ next · ⇧↩ previous · esc close";
 
 impl Workspace {
-    /// ⌘F with the notebook's page on screen: open the bar, or select its text if it's open.
     pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The keyboard leaves the web view for the app's window, where the box is.
         let _ = self.webview.read(cx).raw().focus_parent();
         if let Some(find) = &self.find {
             find.input.update(cx, |s, cx| {
@@ -51,7 +40,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Esc: close the bar, take away the highlight, and give the notebook the keyboard back.
     pub fn close_find(&mut self, cx: &mut Context<Self>) {
         if self.find.take().is_none() {
             return;
@@ -62,7 +50,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Search the page for the box's text: the next match, or the previous one.
     pub fn find_in_page(&mut self, backwards: bool, cx: &mut Context<Self>) {
         let Some(find) = &mut self.find else { return };
         let text = find.input.read(cx).value().to_string();
@@ -86,9 +73,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The bar, under the notebook header: the box (its edge in the focus
-    /// colour while it has the keyboard, the danger colour with no match),
-    /// previous and next, "No matches", the keys and ×.
     pub fn render_find_bar(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let find = self.find.as_ref()?;
         let focused = find.input.read(cx).focus_handle(cx).is_focused(window);
@@ -106,7 +90,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(theme::row_active())))
+                .when(enabled, |d| d.cursor_pointer().tab_stop_on(theme::bg_page()).hover(|s| s.bg(theme::row_active())))
                 .child(glyph(icon, if enabled { theme::text_muted() } else { theme::text_section() }))
                 .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
         };

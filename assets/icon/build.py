@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Regenerate the app icon and logo from the artwork defined here.
-
-Writes, next to this script:
-  icon.svg, icon-small.svg     the icon (1024 grid); the small art is for 16 and 32 px
-  Endeavor.icns                the macOS icon (scripts/bundle.sh copies it into the app)
-  endeavor-256.png, -512.png   for Linux desktop files
-  endeavor.ico                 the Windows installer's and Start menu's icon
-  logo-dark.svg, logo-light.svg  the sky badge + "Endeavor", text as outlines
-
-Needs Chrome or Chromium (set CHROME to its binary if it isn't found),
-macOS's sips and iconutil, fonttools + uharfbuzz (fonts/requirements.txt), and
-Pillow for the .ico. With NO_MAC set it writes only the .ico.
-"""
 import glob
 import os
 import shutil
@@ -24,7 +11,6 @@ FONT = os.path.join(HERE, "..", "..", "fonts", "EndeavorSans-SemiBold.ttf")
 
 
 def squircle(x0=100, y0=100, w=824, r=185.4):
-    """Apple's continuous-corner rounded rect: the macOS icon body on the 1024 grid."""
     corner = [("L", [(1.52866483, 0)]),
               ("C", [(1.08849323, 0), (0.86840689, 0.02196844), (0.66993427, 0.06549600)]),
               ("L", [(0.63149399, 0.07491176)]),
@@ -51,12 +37,6 @@ STAR = "#F3EEE7"
 
 
 def icon_svg(small, with_stars=None):
-    """The turtle's head rising over its shell like a moon, on a dark sky.
-
-    The small art (16 and 32 px) drops the stars and the horizon line, has a
-    bigger head and eye so the eye survives at 16 px, and a stronger rim so the
-    icon keeps its edge against dark menus and Docks. Stars show from 128 px up.
-    """
     if with_stars is None:
         with_stars = not small
     hx, hy, hr = (600, 560, 190) if small else (600, 560, 150)
@@ -92,7 +72,6 @@ def icon_svg(small, with_stars=None):
 
 
 def badge(size):
-    """The sky badge: the icon's scene in a round patch of sky with a ~1 px rim; stars from 64 px up."""
     s = size / 100
     rim = max(1.2, 100 / size) * 2
     stars = "" if size < 64 else (
@@ -116,7 +95,6 @@ def badge(size):
 
 
 def wordmark_paths(size, tracking=-0.02):
-    """'Endeavor' in Endeavor Sans SemiBold as outlines: (svg path d, advance width, cap height), in px."""
     import uharfbuzz as hb
     from fontTools.pens.svgPathPen import SVGPathPen
     from fontTools.pens.transformPen import TransformPen
@@ -138,7 +116,6 @@ def wordmark_paths(size, tracking=-0.02):
     x = 0
     for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
         name = order[info.codepoint]
-        # Flip y: font units go up, SVG goes down; the baseline is y = 0.
         glyphs[name].draw(TransformPen(pen, (scale, 0, 0, -scale, (x + pos.x_offset) * scale, -pos.y_offset * scale)))
         x += pos.x_advance + tracking * upem
     x -= tracking * upem
@@ -147,7 +124,6 @@ def wordmark_paths(size, tracking=-0.02):
 
 
 def logo_svg(text_color):
-    """The name at 36 px; the badge 1.28 times that, 0.28 times that away, centred on each other."""
     size = 36
     mark, gap = round(size * 1.28), round(size * 0.28)
     d, width, cap = wordmark_paths(size)
@@ -188,7 +164,6 @@ def resize(src, dst, px):
 
 
 def write_ico(little, mid, big, path):
-    """The Windows icon: the small art at 16 to 32 px, as in the .icns."""
     from PIL import Image
     sizes = (16, 24, 32, 48, 64, 128, 256)
     images = [Image.open(little if px <= 32 else mid if px < 128 else big).convert("RGBA").resize((px, px), Image.LANCZOS) for px in sizes]

@@ -18,6 +18,7 @@ use crate::settings::IdleStop;
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 pub struct ServerDialog {
     editing: Option<String>,
@@ -408,6 +409,7 @@ impl Workspace {
                         .px(px(6.))
                         .rounded(px(4.))
                         .cursor_pointer()
+                        .tab_stop_on(theme::dialog_bg())
                         .bg(theme::bg_tag())
                         .hover(|s| s.bg(theme::bg_raised()))
                         .font_family(theme::MONO)
@@ -484,6 +486,7 @@ impl Workspace {
                             .id("remove-server")
                             .role(Role::Button)
                             .cursor_pointer()
+                            .tab_stop_on(theme::dialog_bg())
                             .text_color(theme::danger())
                             .button_text(if is_cluster { "Remove cluster…" } else { "Remove server…" })
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -578,6 +581,7 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme::control_edge())
                                         .cursor_pointer()
+                                        .tab_stop_on(theme::dialog_bg())
                                         .child(idle_label)
                                         .child(glyph(Glyph::Chevron, theme::text_faint()))
                                         .on_click(cx.listener(|this, _, _, cx| {

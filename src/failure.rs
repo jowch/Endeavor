@@ -1,8 +1,3 @@
-//! How failures look (boards XTurn, XStopped, XOpen). Three tiers: waiting
-//! (muted, fixes itself: `wait_line`), failed (needs the user: `card`, or a
-//! `page` in place of what couldn't show, or a `notice` under the control that
-//! was used), and recovered (a quiet note in the transcript).
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::sync::Arc;
@@ -11,8 +6,8 @@ use crate::new_session::{Glyph, glyph_at};
 use crate::signin::{Look, button_frame};
 use crate::theme;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
-/// A button with an icon before its label.
 pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<SharedString>, look: Look) -> Stateful<Div> {
     let tint = match look {
         Look::Primary => gpui::white().into(),
@@ -21,8 +16,6 @@ pub fn action(id: impl Into<ElementId>, icon: Option<Glyph>, label: impl Into<Sh
     button_frame(id, look).role(Role::Button).children(icon.map(|g| glyph_at(g, tint, 1.))).button_text(label)
 }
 
-/// Text whose `backticked` names (a cell's) stand out as code. It wraps as
-/// one run of text, which a highlight can't give a font of its own.
 pub fn code_text(text: &str) -> StyledText {
     let mut plain = String::new();
     let mut ranges = Vec::new();
@@ -36,13 +29,8 @@ pub fn code_text(text: &str) -> StyledText {
     StyledText::new(plain).with_highlights(ranges.into_iter().map(move |r| (r, style)))
 }
 
-/// The tallest Details gets before it scrolls: about fourteen lines, so a
-/// long stack trace stays inside its notice or card instead of running off
-/// the window.
 const DETAILS_MAX_H: f32 = 232.;
 
-/// "Details ›": the raw error, closed until clicked. Open, it scrolls past
-/// `DETAILS_MAX_H`, and Copy puts the whole error on the clipboard.
 pub fn details(id: impl Into<ElementId>, text: impl Into<SharedString>, open: bool, toggle: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
     Details { id: id.into(), text: text.into(), open, toggle: Box::new(toggle) }.into_any_element()
 }
@@ -61,11 +49,8 @@ impl RenderOnce for Details {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Details { id, text, open, toggle } = self;
         let shown = open && !text.is_empty();
-        // The box's scroll position, and whether Copy just copied, live as
-        // long as the Details do.
         let (scroll, copied) = window.with_element_namespace(id.clone(), |window| {
             let scroll = window.use_keyed_state("scroll", cx, |_, _| ScrollHandle::new()).read(cx).clone();
-            // (clicks so far, showing Copied): a later click's timer clears it, not an earlier one's.
             (scroll, window.use_keyed_state("copied", cx, |_, _| (0u64, false)))
         });
         let copy = shown.then(|| {
@@ -83,6 +68,7 @@ impl RenderOnce for Details {
                 .mr(px(-4.))
                 .rounded(px(4.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_size(theme::size_meta())
                 .text_color(theme::text_faint())
                 .hover(|s| s.text_color(theme::text_secondary()))
@@ -127,6 +113,7 @@ impl RenderOnce for Details {
                             .items_center()
                             .gap(px(4.))
                             .cursor_pointer()
+                            .tab_stop_on(theme::bg_page())
                             .text_size(theme::size_meta())
                             .text_color(theme::text_faint())
                             .hover(|s| s.text_color(theme::text_secondary()))
@@ -158,9 +145,6 @@ impl RenderOnce for Details {
     }
 }
 
-/// Something that needs the user, where the thing would have been: a title
-/// saying what didn't happen, a plain reason, one primary button, and the raw
-/// error under Details.
 pub fn card(title: impl Into<SharedString>, body: impl Into<SharedString>, buttons: Vec<AnyElement>, details: Option<AnyElement>) -> Div {
     div()
         .flex()
@@ -188,10 +172,6 @@ pub fn card(title: impl Into<SharedString>, body: impl Into<SharedString>, butto
         )
 }
 
-/// Keeps a wheel turn from what's behind (the transcript) while the panel
-/// can still scroll that way. A sideways turn always stays: the transcript
-/// would take it as up and down. The panel's own scrolling runs before this
-/// and moves the offset by the turn already, so this looks at where it was.
 pub fn hand_on(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
     panel.on_scroll(move |event, window, cx| {
         let delta = event.delta.pixel_delta(window.line_height());
@@ -204,14 +184,11 @@ pub fn hand_on(panel: Stateful<Div>, handle: ScrollHandle) -> Stateful<Div> {
     })
 }
 
-/// What leads a wait line: a clock, the offline mark, or a spinner.
 pub enum Lead {
     Clock,
     Spinner(ElementId),
 }
 
-/// Waiting, as offline does it: muted, above the composer, and it fixes
-/// itself; at most a quiet Try now.
 pub fn wait_line(lead: Lead, text: impl IntoElement, button: Option<AnyElement>, cx: &App) -> Div {
     let lead = match lead {
         Lead::Clock => glyph_at(Glyph::Clock, theme::text_muted(), 14. / 12.).into_any_element(),
@@ -230,8 +207,6 @@ pub fn wait_line(lead: Lead, text: impl IntoElement, button: Option<AnyElement>,
         .children(button)
 }
 
-/// A page in place of what couldn't show (a transcript, a notebook): an icon,
-/// what happened, why, and at most two things to do.
 pub fn page(icon: Glyph, title: impl Into<SharedString>, body: Vec<AnyElement>, buttons: Vec<AnyElement>, details: Option<AnyElement>) -> Div {
     div()
         .size_full()
@@ -249,8 +224,6 @@ pub fn page(icon: Glyph, title: impl Into<SharedString>, body: Vec<AnyElement>, 
         .children(details.map(|d| div().w(px(380.)).max_w_full().mt(px(6.)).text_left().child(d)))
 }
 
-/// A one-off failure, under the control that was used: what didn't happen,
-/// why, a way on, and ×. It stays until closed or tried again.
 pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, buttons: Vec<AnyElement>, details: Option<AnyElement>, close: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
     div()
         .id("failure-notice")
@@ -291,6 +264,7 @@ pub fn notice(title: impl Into<SharedString>, body: impl Into<SharedString>, but
                                 .justify_center()
                                 .rounded(px(4.))
                                 .cursor_pointer()
+                                .tab_stop_on(theme::popover_bg())
                                 .hover(|s| s.bg(theme::row_active()))
                                 .child(glyph_at(Glyph::Close, theme::text_faint(), 13. / 12.))
                                 .on_click(move |_, window, cx| close(window, cx)),

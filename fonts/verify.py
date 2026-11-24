@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Check the built Endeavor Sans fonts. Usage: python3 fonts/verify.py"""
 import sys
 import tempfile
 from pathlib import Path
@@ -16,7 +15,7 @@ WEIGHTS = ["Regular", "Medium", "SemiBold"]
 ACCENTS = ["β̂", "σ̂", "θ̂", "λ̂", "μ̂", "x̂", "k̂", "d̂", "n̂",
            "ŷ", "Ĥ", "ā", "x̄", "ȳ", "ε̃", "ψ̇", "x̣"]
 GREEK = [c for c in range(0x391, 0x3AA) if c != 0x3A2] + list(range(0x3B1, 0x3CA)) + \
-        [0x3D1, 0x3D5, 0x3D6, 0x3F0, 0x3F1, 0x3F5]  # ϑ ϕ ϖ ϰ ϱ ϵ
+        [0x3D1, 0x3D5, 0x3D6, 0x3F0, 0x3F1, 0x3F5]
 PAGE_TEXT = ("Posterior means: μ = 2.31, σ = 0.18, λ = 0.042 h⁻¹, θ ∈ [0, π], ρ(x, y) = 0.87; 10⁻⁶ χ² ∂L/∂β ∇f "
              "∝ ∉ ℏ ± × ÷ − ≈ ≠ ≤ ≥ ∑ ∏ ∫ √ ∞ ° ‰ Å x⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ → · • … – — “ ” ’")
 failures = []
@@ -74,7 +73,6 @@ def bounds(font, g):
 
 
 def runs(font, g, x=None, y=None, step=1):
-    """Lengths of the ink runs along a vertical line at x or a horizontal line at y."""
     gs = font.getGlyphSet()
     b = bounds(font, g)
     lo, hi = (b[1], b[3]) if x is not None else (b[0], b[2])

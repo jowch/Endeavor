@@ -1,8 +1,3 @@
-//! First-launch setup screen: the turtle walks in and looks around while one
-//! quiet line and a thin bar report setup; a failed step lists the steps and
-//! offers Retry. Shown until setup has finished once; later launches report
-//! setup work (e.g. a new adapter version) in the status line instead.
-
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -14,9 +9,6 @@ use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
 use crate::turtle::{self, Gaze, Pose, ease, lerp};
 
-/// Setup steps, in the order they run. Julia isn't one: the core installs and
-/// starts it when a Julia notebook first needs it, and the runtime starts
-/// without it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Step {
     Runtime,
@@ -27,7 +19,6 @@ pub enum Step {
 impl Step {
     pub const ALL: [Step; 3] = [Step::Runtime, Step::Agent, Step::Claude];
 
-    /// `agent` names the assistant picked ("Claude agent", "Connecting to Codex").
     pub fn label(self, agent: &str) -> String {
         match self {
             Step::Runtime => "Notebook runtime".into(),
@@ -53,13 +44,11 @@ impl Step {
     }
 }
 
-/// A setup step is under way: what it's doing, and how far along if known.
 #[derive(Debug)]
 pub struct Progress {
     pub step: Step,
     pub detail: String,
     pub fraction: Option<f32>,
-    /// A raw log line: setup screen only, not the status line.
     pub log: bool,
 }
 
@@ -72,11 +61,8 @@ impl Progress {
 pub struct Setup {
     step: Step,
     fraction: Option<f32>,
-    /// What went wrong, and when (the turtle tucks its head in from then).
     error: Option<(String, Instant)>,
-    /// The intro plays from here.
     shown: Instant,
-    /// The assistant picked on this screen; until then the choice shows.
     pub agent: Option<crate::agent::Agent>,
 }
 
@@ -91,7 +77,6 @@ fn marker() -> Option<PathBuf> {
 }
 
 impl Setup {
-    /// First launch: setup hasn't finished yet on this Mac.
     pub fn needed() -> bool {
         marker().is_some_and(|m| !m.exists())
     }
@@ -102,7 +87,6 @@ impl Setup {
         }
     }
 
-    /// Steps only move forward; a late message from an earlier step is ignored.
     pub fn apply(&mut self, p: Progress) {
         if p.step >= self.step {
             (self.step, self.fraction) = (p.step, p.fraction);
@@ -113,7 +97,6 @@ impl Setup {
         self.error = Some((error, Instant::now()));
     }
 
-    /// Back to `step` if setup is past it: a new pick of assistant starts its steps over.
     pub fn back_to(&mut self, step: Step) {
         if self.step > step {
             self.step = step;
@@ -129,12 +112,10 @@ impl Setup {
         self.error.is_some()
     }
 
-    /// The assistant's name for the steps: the one picked, else Claude.
     pub fn agent_name(&self) -> &'static str {
         self.agent.unwrap_or_default().name()
     }
 
-    /// The step under way, or the one that failed.
     pub fn step(&self) -> Step {
         self.step
     }
@@ -145,14 +126,11 @@ impl Setup {
     }
 }
 
-/// Shell radius: the shell is 120 px wide.
 const R: f32 = 60.;
-/// Tall enough for the highest star.
 const SCENE_HEIGHT: f32 = 3.7 * R + 2.;
 const WALK: f32 = 1.6;
 const GAZE_START: f32 = 3.7;
 const GAZE_MOVE: f32 = 0.45;
-/// With reduced motion: everything is in and the turtle looks up at the stars.
 const STILL: f32 = 6.;
 
 const STARS_GAZE: Gaze = Gaze { eye_x: 1., look: 1., dx: 0.06, dy: -0.28 };
@@ -161,7 +139,6 @@ const YOU: Gaze = Gaze { eye_x: 0., look: 0.1, dx: 0., dy: -0.04 };
 const BACK: Gaze = Gaze { eye_x: -1.3, look: 0.35, dx: -0.07, dy: -0.08 };
 const DOWN: Gaze = Gaze { eye_x: 1., look: -0.7, dx: 0.05, dy: 0.07 };
 const AHEAD: Gaze = Gaze::AHEAD;
-/// (gaze, seconds held), hand-ordered so it doesn't feel like a metronome.
 const GAZES: [(Gaze, f32); 14] = [
     (STARS_GAZE, 4.),
     (AHEAD, 1.6),
@@ -178,10 +155,8 @@ const GAZES: [(Gaze, f32); 14] = [
     (STARS_GAZE, 3.6),
     (AHEAD, 2.4),
 ];
-/// (x, y) from where the turtle stops, in shell radii, and the radius in px.
 const STARS: [(f32, f32, f32); 7] = [(1.5, -2.7, 3.7), (2.4, -2.1, 2.8), (0.8, -3.2, 3.), (3., -3., 4.6), (2., -3.6, 2.5), (-0.3, -2.9, 2.3), (3.6, -2.3, 2.5)];
 
-/// After the intro the head glances through `GAZES` on a loop, easing between them.
 fn gaze_at(t: f32) -> Gaze {
     if t < GAZE_START {
         return AHEAD;
@@ -203,9 +178,6 @@ fn gaze_at(t: f32) -> Gaze {
     AHEAD
 }
 
-/// The turtle walks in from the left edge and stops just left of centre; the stars
-/// come out one by one and twinkle. `t` is seconds since the splash showed; `tuck`
-/// how far the head is in the shell.
 fn scene(t: f32, tuck: f32) -> impl IntoElement {
     canvas(
         |_, _, _| (),
@@ -244,19 +216,12 @@ fn scene(t: f32, tuck: f32) -> impl IntoElement {
     .h(px(SCENE_HEIGHT))
 }
 
-/// What shows under the turtle and the name.
 pub enum Below {
-    /// Setup's progress line and bar, or its failure.
     Progress,
-    /// A panel under a line of its own and, optionally, the bar filled this far
-    /// (sign-in); `tucked` is when the turtle drew its head in.
     Panel { line: &'static str, bar: Option<f32>, panel: AnyElement, tucked: Option<Instant> },
-    /// A card in place of the progress (no network).
     Card(AnyElement),
 }
 
-/// `retry` restarts the failed step; `change`, when the assistant's own step
-/// failed, goes back to the choice of assistant.
 pub fn render(
     setup: &Setup,
     below: Below,
@@ -335,9 +300,9 @@ pub fn render(
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(setup.step.failed(setup.agent_name()))
-                    .child(div().text_size(theme::size_meta()).text_color(muted).child(error.clone()))
-                    .child(div().text_size(theme::size_meta()).text_color(muted).child("Check your connection and retry, or see the logs.")),
+                    .child(theme::words("setup-failed", setup.step.failed(setup.agent_name())))
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child(theme::words("setup-error", error.clone())))
+                    .child(div().text_size(theme::size_meta()).text_color(muted).child(theme::words("check-your-connection-and-retry", "Check your connection and retry, or see the logs."))),
             )
             .child(
                 div()
@@ -348,9 +313,6 @@ pub fn render(
                     .children(change.map(|change| button("setup-change-assistant", "Choose another assistant").on_click(change))),
             )
     });
-    // The night sky is a band over the steps: dark in both appearances, while
-    // the steps sit on the page. The two parts grow alike, so the whole stays
-    // centred; in dark they are one colour.
     let sky = div()
         .w_full()
         .flex_grow(1.)
@@ -374,7 +336,6 @@ pub fn render(
         )
         .child(div().mt(px(4.)).relative().top(px((1. - tagline_in) * 8.)).opacity(tagline_in).text_color(theme::sky_muted()).child("Build our future"));
     div().size_full().flex().flex_col().child(sky).child(
-        // Room for the failure message and sign-in, so the turtle stays put when they appear.
         div().w_full().flex_grow(1.).flex().flex_col().items_center().child(div().min_h(px(300.)).flex().flex_col().items_center().map(|d| match below {
             Below::Panel { line, bar, panel, .. } => d.child(
                 div()
@@ -407,9 +368,6 @@ pub fn render(
     )
 }
 
-/// Debug builds only: `ENDEAVOR_SPLASH_PREVIEW=1` opens the setup screen with made-up
-/// progress, installing nothing. Add `fail` to stop partway, `still` for
-/// the reduced-motion frame (e.g. `fail,still`).
 #[cfg(debug_assertions)]
 pub mod preview {
     use std::time::Duration;

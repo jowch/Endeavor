@@ -70,7 +70,7 @@ Cursor is listed as **Not available yet**.
   **Choose…** (or **Change…**) and pick the file named `julia`, in a `bin`
   folder. It must be Julia 1.12 or newer.
 
-The change takes effect when Julia restarts. Servers and clusters set their
+The change takes effect when notebooks restart. Servers and clusters set their
 own Julia. See [Servers](./servers.md).
 
 **R** sets which R runs your R notebooks on your Mac or Linux computer.
@@ -90,8 +90,9 @@ Click **Settings** next to it to choose:
 
 A change takes effect when notebooks restart: **Restart** appears under the
 choice while notebooks run. Servers and clusters set their own R. R notebooks
-don't run on Windows yet, so there the row says **Not available yet**, as
-Python's does everywhere.
+don't run on Windows yet, so there the row says **Not available yet**. The
+Python row says Python notebooks run on marimo, with uv getting Python and each
+notebook's packages.
 
 ## Where notebooks run
 
@@ -119,7 +120,7 @@ server…** and **Add cluster…** add new ones. See [Servers](./servers.md) and
 
 ## Troubleshooting
 
-**Restart Julia**, **Repair Julia**, **Log files** and **Report a problem**.
+**Restart notebooks**, **Repair Julia**, **Log files** and **Report a problem**.
 See [Troubleshooting](./troubleshooting.md).
 
 ## About

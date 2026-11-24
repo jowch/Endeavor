@@ -1,8 +1,13 @@
 # Development
 
 How to build Endeavor from source and work on it. For how to check a change
-from a script, see [testing.md](testing.md). For status and plans, see
-[roadmap.md](roadmap.md) and [pluto-agent-design-doc.md](pluto-agent-design-doc.md).
+from a script, see [testing.md](testing.md); for what CI checks and how
+the nightly is published, [ci.md](ci.md). For status and plans, see
+[roadmap.md](roadmap.md) and [pluto-agent-design-doc.md](pluto-agent-design-doc.md). How the parts
+fit is in [agent-connection.md](agent-connection.md) (the agent),
+[remote-sessions.md](remote-sessions.md) (runtimes on this computer and on
+servers), [notebook-web-view.md](notebook-web-view.md) (the notebook in the
+window) and [updates.md](updates.md).
 
 ## Run from source
 
@@ -25,7 +30,8 @@ missing" and starts nothing. To try a release build, bundle it (below).
 
 To keep the Linux helpers current by themselves, turn on the repo's git hooks
 once: `git config core.hooksPath .githooks`. After each pull or branch switch
-they fetch the helpers GitHub built for that commit.
+(not a checkout of single files) they fetch the helpers GitHub built for that
+commit.
 
 `scripts/helpers.sh` checks out the EndeavorMCP commit that `Cargo.lock`
 pins (in `target/endeavor-mcp`) and downloads the helper for Linux servers
@@ -55,8 +61,9 @@ Working in a Claude Code cloud session (no display, Linux) is in
 
 ## Other parts of the repo
 
-- App icon and logo: `python3 assets/icon/build.py` regenerates them from the
-  artwork in that script.
+- App icon, logo and the Mac disk image's background: scripts in `assets/`
+  draw them ([artwork.md](artwork.md)).
+- Fonts: `fonts/build.py` builds Endeavor Sans ([fonts/README.md](../fonts/README.md)).
 - Page script (the code injected into the notebook page): `frontend/`,
   TypeScript. After changing it, run `cd frontend && npm install && npm test`.
   That builds `dist/page.js`, which is committed so `cargo build` needs no

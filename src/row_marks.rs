@@ -1,10 +1,3 @@
-//! The one mark a sidebar row's leading bullet shows, strongest first: the
-//! session needs you › its last turn stopped with an error › Claude is
-//! working › a new reply › its server isn't reachable › messages wait to
-//! send. With none, the bullet is an idle ring. A collapsed folder heading
-//! shows the strongest of its rows' marks.
-
-/// A row's mark. The order of the variants is their strength.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowMark {
     NeedsYou,
@@ -12,27 +5,18 @@ pub enum RowMark {
     Working { agent: &'static str },
     NewReply,
     ServerDown { host: String },
-    /// Queued messages held because Claude or the server can't be reached;
-    /// `until` finishes "…wait to send once": "Claude is back".
     Waiting { count: usize, until: String },
 }
 
-/// What a row's mark is chosen from.
 #[derive(Default)]
 pub struct RowFacts {
     pub needs_you: bool,
     pub error: bool,
-    /// The session's turn is running, and not waiting for the network.
     pub working: bool,
-    /// The agent a working session's mark names.
     pub agent: &'static str,
     pub new_reply: bool,
-    /// The session's server, while it can't be reached.
     pub server_down: Option<String>,
-    /// Messages held, and what they wait for.
     pub waiting: Option<(usize, String)>,
-    /// This Mac is offline: every session is cut off at once, so rows don't
-    /// say so one by one (the status line does).
     pub mac_offline: bool,
 }
 
@@ -58,13 +42,11 @@ pub fn row_mark(f: &RowFacts) -> Option<RowMark> {
     f.waiting.as_ref().filter(|(count, _)| *count > 0).map(|(count, until)| RowMark::Waiting { count: *count, until: until.clone() })
 }
 
-/// A collapsed folder's mark: the strongest of its rows'.
 pub fn strongest(marks: impl IntoIterator<Item = RowMark>) -> Option<RowMark> {
     marks.into_iter().min()
 }
 
 impl RowMark {
-    /// The mark's tooltip, in words.
     pub fn words(&self) -> String {
         match self {
             RowMark::NeedsYou => "Waiting for your answer".into(),
@@ -77,7 +59,6 @@ impl RowMark {
         }
     }
 
-    /// What VoiceOver reads for the row: its title, then the mark's words.
     pub fn label(&self, title: &str) -> String {
         let words = self.words();
         let mut chars = words.chars();
@@ -88,7 +69,6 @@ impl RowMark {
         format!("{title}, {words}")
     }
 
-    /// The debug state's name for it.
     pub fn name(&self) -> &'static str {
         match self {
             RowMark::NeedsYou => "needs_approval",

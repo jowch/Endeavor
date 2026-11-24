@@ -1,6 +1,3 @@
-//! The app binary is also This Mac's runtime helper (`endeavor --helper …`)
-//! and ssh's askpass program, so neither needs the helper binary (`endeavor-helper`) beside it.
-
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Write};
@@ -43,7 +40,6 @@ fn the_app_starts_the_runtime_core_as_the_helper() {
     let dir = std::env::temp_dir().join(format!("endeavor-helper-core-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // A julia that records the command line of the process that started it (the core).
     let julia = dir.join("julia");
     let script = format!(
         "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo 'julia version 1.12.0'; exit 0; }}\nps -o command= -p $PPID > {core}.tmp\necho $PPID >> {core}.tmp\nmv {core}.tmp {core}\nexec sleep 60\n",
@@ -93,7 +89,7 @@ fn the_app_is_sshs_askpass() {
         let mut line = String::new();
         BufReader::new(&connection).read_line(&mut line).unwrap();
         let ask: Ask = serde_json::from_str(&line).unwrap();
-        (&connection).write_all(format!("{}\n", serde_json::to_string(&Answer { text: Some("hunter2".into()) }).unwrap()).as_bytes()).unwrap();
+        (&connection).write_all(format!("{}\n", serde_json::to_string(&Answer { text: Some("hunter2".into()), gave_up: false }).unwrap()).as_bytes()).unwrap();
         ask
     });
     let out = Command::new(env!("CARGO_BIN_EXE_endeavor")).arg("jc@lab's password: ").env(SOCKET_ENV, &socket).output().unwrap();
