@@ -118,8 +118,10 @@ The header above the notebook shows:
   notebook**.
 
 The **Share and export** button exports the notebook as a **Notebook file…**, **Static
-HTML…** or **PDF…**, and has Pluto's **Present**, **Record…** and
-**Frontmatter…**.
+HTML…** or **PDF…**. On Julia notebooks it also has Pluto's **Present**,
+**Record…** and **Frontmatter…**. On a Python notebook, **Static HTML…** is
+marimo's own export. A Python notebook in safe preview shows a preview of its
+file instead of the notebook, so Share and export appears once you run it.
 
 To search the notebook's text, press ⌘F.
 
