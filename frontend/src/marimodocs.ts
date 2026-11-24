@@ -51,7 +51,17 @@ export function besideIconColumn(): { left: number; bottom: number } {
   return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
 }
 
+export function sidebarDragging(): boolean {
+  return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
+}
+
+function endSidebarDrag(): void {
+  const target = document.activeElement ?? document.body;
+  for (const type of ["keydown", "keyup"]) target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
+}
+
 function follow() {
+  if (sidebarDragging()) endSidebarDrag();
   const open = docsShown();
   if (open) {
     document.documentElement.dataset.endeavorDrawer = "docs";
@@ -76,6 +86,6 @@ export function initMarimoDocs(): void {
   };
   const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
   on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow));
-  new MutationObserver(follow).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size"], childList: true, subtree: true, characterData: true });
+  new MutationObserver(follow).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
   follow();
 }

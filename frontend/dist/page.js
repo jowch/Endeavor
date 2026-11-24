@@ -3113,7 +3113,15 @@ footer form#feedback { display: none !important; }
     if (!column) return { left: 0, bottom: 0 };
     return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
   }
+  function sidebarDragging() {
+    return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
+  }
+  function endSidebarDrag() {
+    const target = document.activeElement ?? document.body;
+    for (const type of ["keydown", "keyup"]) target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
+  }
   function follow2() {
+    if (sidebarDragging()) endSidebarDrag();
     const open3 = docsShown();
     if (open3) {
       document.documentElement.dataset.endeavorDrawer = "docs";
@@ -3136,7 +3144,7 @@ footer form#feedback { display: none !important; }
     };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow2));
-    new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size"], childList: true, subtree: true, characterData: true });
+    new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
     follow2();
   }
 

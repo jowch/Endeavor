@@ -64,3 +64,11 @@ test("the drawer starts beside marimo's icon column and ends above its footer", 
   const { besideIconColumn } = await load();
   assert.equal(JSON.stringify(besideIconColumn()), JSON.stringify({ left: 0, bottom: 0 }), "no column, the whole width");
 });
+
+test("marimo's sidebar counts as dragging only while its options are inert", async () => {
+  const { window } = new JSDOM(`<body><div data-testid="chrome-sidebar"><div role="option" data-key="files"></div></div></body>`, { runScripts: "outside-only" });
+  const { sidebarDragging } = window.eval(`${outputFiles[0].text};docs`);
+  assert.equal(sidebarDragging(), false);
+  window.document.querySelector("[role=option]").setAttribute("inert", "");
+  assert.equal(sidebarDragging(), true);
+});

@@ -188,6 +188,13 @@ impl NotebookAction {
     }
 }
 
+pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, page: &PageState) -> Option<String> {
+    match kind {
+        Backend::Marimo => page.drawer.clone().filter(|_| shown),
+        _ => reported.and_then(|p| p.drawer.clone()),
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum HeaderTool {
     Share,
@@ -736,7 +743,7 @@ impl Workspace {
         let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), point_text.into())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
-        let drawer = page.and_then(|p| p.drawer.clone());
+        let drawer = header_drawer(session.kind, shown, page, &self.page);
         let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
         let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
@@ -1741,6 +1748,16 @@ mod tests {
         ask.asked(Some("docs"));
         ask.page_loading();
         assert_eq!(ask.page_ready(), None, "a click for a page that was replaced before it was ready");
+    }
+
+    #[test]
+    fn the_live_docs_button_shows_open_on_a_python_page_which_never_reports_its_notebook() {
+        use super::{PageState, header_drawer};
+        let open = PageState { drawer: Some("docs".into()), ..Default::default() };
+        assert_eq!(header_drawer(Backend::Marimo, true, None, &open), Some("docs".into()));
+        assert_eq!(header_drawer(Backend::Marimo, false, None, &open), None, "not while another pane shows");
+        assert_eq!(header_drawer(Backend::Pluto, true, None, &open), None, "Julia goes by the page that reported its notebook");
+        assert_eq!(header_drawer(Backend::Pluto, true, Some(&open), &open), Some("docs".into()));
     }
 
     #[test]
