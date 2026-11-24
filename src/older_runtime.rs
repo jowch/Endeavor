@@ -51,6 +51,15 @@ impl Version {
         }
     }
 
+    pub fn shows_python_in_the_app(self) -> bool {
+        const SHOWS_PYTHON: u32 = 49;
+        match self {
+            Version::Usable => endeavor_mcp::CORE_INTERFACE >= SHOWS_PYTHON,
+            Version::Other(interface) => interface.is_some_and(|i| i >= SHOWS_PYTHON),
+            Version::NoRunGate => false,
+        }
+    }
+
     pub fn has_r_status(self) -> bool {
         match self {
             Version::Usable => endeavor_mcp::CORE_INTERFACE >= 9,
@@ -92,8 +101,23 @@ pub fn refusal(version: Version, host: &str, kind: Backend, tool: &str, argument
     if version == Version::NoRunGate && endeavor_mcp::runs_code(tool, arguments) {
         return Some(refused("This notebook's Julia"));
     }
+    if !version.shows_python_in_the_app() && opens_python(tool, arguments, kind) {
+        return Some(python_needs_a_restart(host));
+    }
     let pathless = arguments["path"].as_str().is_none_or(|path| path.trim().is_empty());
     (tool == "new_notebook" && pathless && kind != Backend::Pluto && !version.has_session_kinds()).then(|| not_of_its_kind(host, kind))
+}
+
+fn opens_python(tool: &str, arguments: &Value, kind: Backend) -> bool {
+    let path = arguments["path"].as_str().filter(|path| !path.trim().is_empty());
+    matches!(tool, "open_notebook" | "new_notebook") && path.map_or(tool == "new_notebook" && kind == Backend::Marimo, |path| crate::new_session::kind_of_path(path) == Backend::Marimo)
+}
+
+fn python_needs_a_restart(host: &str) -> String {
+    format!(
+        "ArgumentError: older_runtime::Endeavor on {host} was started by an older version, which doesn't show Python notebooks in the app. \
+         Don't stop it yourself: call request_restart, which asks the user whether to restart Endeavor on {host}. That closes its open notebooks, and starts this version."
+    )
 }
 
 fn not_of_its_kind(host: &str, kind: Backend) -> String {
@@ -164,6 +188,18 @@ mod tests {
         assert!(!refused(Version::Usable, "execute_cell", json!({ "cell_id": "a" })));
         let why = refusal(Version::NoRunGate, "lab", Backend::Pluto, "execute_cell", &json!({ "cell_id": "a" })).unwrap();
         assert!(why.contains("call request_restart") && why.contains("don't stop it yourself"), "the agent asks the user, and only that: {why}");
+    }
+
+    #[test]
+    fn a_runtime_from_before_the_python_pane_has_the_user_restart_it_for_a_python_notebook() {
+        let refused = |version: Version, tool: &str, kind: Backend, arguments: Value| refusal(version, "lab", kind, tool, &arguments);
+        let why = refused(Version::Other(Some(48)), "open_notebook", Backend::Pluto, json!({ "path": "/w/fit.py" })).unwrap();
+        assert!(why.contains("doesn't show Python notebooks in the app") && why.contains("call request_restart"), "{why}");
+        assert!(refused(Version::Other(Some(48)), "new_notebook", Backend::Marimo, json!({})).is_some(), "a Python session's new notebook");
+        assert!(refused(Version::Other(Some(48)), "open_notebook", Backend::Marimo, json!({ "path": "/w/fit.jl" })).is_none(), "the path decides");
+        assert!(refused(Version::Other(Some(49)), "open_notebook", Backend::Pluto, json!({ "path": "/w/fit.py" })).is_none());
+        assert!(refused(Version::Usable, "new_notebook", Backend::Marimo, json!({ "path": "/w/fit.py" })).is_none());
+        assert!(refused(Version::Other(Some(48)), "read_cell", Backend::Marimo, json!({ "path": "/w/fit.py" })).is_none());
     }
 
     #[test]

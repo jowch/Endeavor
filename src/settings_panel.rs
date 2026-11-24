@@ -654,7 +654,7 @@ impl Workspace {
         vec![
             group(Some("When notebooks stop"), vec![Item::Row(idle)]),
             group(Some("Running code"), vec![Item::Row(ask)]),
-            group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), later("python", "Python", ".py notebooks")])
+            group(Some("Languages"), vec![Item::Row(julia), self.r_row().map_or_else(|| later("r", "R", ".R notebooks"), Item::Row), self.python_row().map_or_else(|| later("python", "Python", ".py notebooks"), Item::Row)])
                 .foot("Each language has its own program. Servers and clusters set theirs in Where notebooks run."),
         ]
     }
@@ -683,6 +683,20 @@ impl Workspace {
         r.summary = Some(format!("{}. Choose which R runs your R notebooks.", self.r_line()).into());
         r.controls.push(Control::Button { label: "Settings", look: Look::Secondary, icon: Some(Glyph::Gear), act: Some(Act::Go(Page::R)), aria: "R settings".into() });
         Some(r)
+    }
+
+    fn python_row(&self) -> Option<Row> {
+        if !crate::new_session::SHOWS_PYTHON {
+            return None;
+        }
+        let mut python = row("python", "Python");
+        python.aside = Some(".py notebooks".into());
+        python.lead = Lead::Icon { glyph: Glyph::File, dot: false, faint: false, tone: None };
+        let line = "Runs on marimo, with uv getting Python and each notebook's packages";
+        python.status = Some(Status2::new(line, Tone::Plain));
+        python.search = Some("Python .py marimo uv notebooks".into());
+        python.summary = Some(format!("{line}. With no uv on this computer, the first Python notebook offers to download Endeavor's own.").into());
+        Some(python)
     }
 
     fn r_needs_restart(&self) -> bool {

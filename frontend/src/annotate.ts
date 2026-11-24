@@ -5,16 +5,17 @@ import { cellName } from "./cellname";
 import { type Box, type Pick, SHOOTING, pickSource, sendQuote, shoot } from "./quote";
 import { cellCode } from "./reveal";
 import { context } from "./state";
+import { dom } from "./engine";
 
-const css = `
-  body.annotating pluto-cell:hover, body.annotating pluto-cell :hover { cursor: crosshair !important; }
+const css = () => `
+  body.annotating ${dom().cell}:hover, body.annotating ${dom().cell} :hover { cursor: crosshair !important; }
   body.annotating .annotate-hover { outline: 1.5px dashed var(--e-hover-edge); outline-offset: 3px; }
   body.annotating .annotate-picked { outline: 1.5px solid var(--e-accent); outline-offset: 3px; }
   body.annotating.annotate-drawing .annotate-hover { outline: none; }
   body.annotating.annotate-drawing, body.annotating.annotate-drawing * { user-select: none; }
-  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
-  body.annotate-numbers pluto-input .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
-  body.annotating pluto-input .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
+  body.annotate-numbers ${dom().input} .cm-lineNumbers .cm-gutterElement { color: var(--cm-color-line-numbers) !important; }
+  body.annotate-numbers ${dom().input} .cm-lineNumbers .cm-gutterElement::after { color: transparent !important; }
+  body.annotating ${dom().input} .cm-line.annotate-line { background: rgba(204, 63, 0, 0.12); }
   #annotate-tag { position: absolute; z-index: 9999; display: none; pointer-events: none; padding: 0 6px; border-radius: 4px;
     background: var(--e-accent); color: #fff; font: 11px/18px system-ui; }
   body.annotating #annotate-tag.shown { display: block; }
@@ -44,7 +45,7 @@ const css = `
   body.annotating.${SHOOTING} #annotate-frame, body.annotating.${SHOOTING} #annotate-box, body.annotating.${SHOOTING} #annotate-tag,
   body.annotating.${SHOOTING} #annotate-hint, body.annotating.${SHOOTING} #annotate-bar { display: none; }
   body.annotating.${SHOOTING} .annotate-picked, body.annotating.${SHOOTING} .annotate-hover { outline: none; }
-  body.annotating.${SHOOTING} pluto-input .cm-line.annotate-line { background: none; }
+  body.annotating.${SHOOTING} ${dom().input} .cm-line.annotate-line { background: none; }
 `;
 
 const DRAG = 4;
@@ -56,11 +57,11 @@ const PARAGRAPH = "p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table";
 const TREE = "pluto-tree, table.pluto-table";
 
 export function targetAt(el: Element | null): Target | null {
-  const cell = el?.closest<HTMLElement>("pluto-cell");
+  const cell = el?.closest<HTMLElement>(dom().cell);
   if (!el || !cell) return null;
-  const input = el.closest<HTMLElement>("pluto-input");
+  const input = el.closest<HTMLElement>(dom().input);
   if (input) return { part: "code", cell, el: input };
-  const output = el.closest<HTMLElement>("pluto-output");
+  const output = el.closest<HTMLElement>(dom().output);
   if (!output) return { part: "cell", cell, el: cell };
   let figure = el.closest<HTMLElement>(FIGURE);
   while (figure?.parentElement?.closest(FIGURE) && output.contains(figure.parentElement.closest(FIGURE))) figure = figure.parentElement.closest<HTMLElement>(FIGURE);
@@ -93,7 +94,7 @@ const pageBox = (r: DOMRect): Box => ({
   bottom: r.bottom + window.scrollY,
 });
 
-const cmLines = (cell: Element) => [...cell.querySelectorAll<HTMLElement>("pluto-input .cm-line")];
+const cmLines = (cell: Element) => [...cell.querySelectorAll<HTMLElement>(`${dom().input} .cm-line`)];
 
 export function pickStatus(picks: Pick[]): string {
   if (picks.length > 1) return `${picks.length} picks`;
@@ -137,10 +138,10 @@ export function initAnnotate(answered = false): void {
   const picks: Picked[] = [];
   let hover: Target | null = null;
   const active = () => document.body.classList.contains("annotating");
-  const cells = () => [...document.querySelectorAll<HTMLElement>("pluto-cell")];
+  const cells = () => [...document.querySelectorAll<HTMLElement>(dom().cell)];
 
   const style = document.createElement("style");
-  style.textContent = css;
+  style.textContent = css();
   const frame = document.createElement("div");
   frame.id = "annotate-frame";
   const box = document.createElement("div");
@@ -231,13 +232,13 @@ export function initAnnotate(answered = false): void {
     const code = cellCode(cell);
     switch (target.part) {
       case "cell":
-        return { pick: { part: "cell", cell: cell.id, code }, el };
+        return { pick: { part: "cell", cell: dom().id(cell), code }, el };
       case "code":
-        return { pick: { part: "cell", cell: cell.id, code }, el };
+        return { pick: { part: "cell", cell: dom().id(cell), code }, el };
       case "output":
-        return { pick: { part: "output", cell: cell.id, code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
+        return { pick: { part: "output", cell: dom().id(cell), code, text: (el.innerText ?? el.textContent ?? "").trim() || widgetValues(el) }, el };
       case "figure":
-        return { pick: { part: "figure", cell: cell.id, code }, el };
+        return { pick: { part: "figure", cell: dom().id(cell), code }, el };
     }
   }
 
@@ -245,7 +246,7 @@ export function initAnnotate(answered = false): void {
     const [first, last] = [Math.min(from, to), Math.max(from, to)];
     const code = cellCode(cell);
     const text = code.split("\n").slice(first - 1, last).join("\n");
-    return { pick: { part: "lines", cell: cell.id, code, lines: [first, last], text }, lines: cmLines(cell).slice(first - 1, last) };
+    return { pick: { part: "lines", cell: dom().id(cell), code, lines: [first, last], text }, lines: cmLines(cell).slice(first - 1, last) };
   }
 
   function set(enable: boolean) {
@@ -256,7 +257,7 @@ export function initAnnotate(answered = false): void {
     drag = null;
     showHover(null);
     if (enable) {
-      for (const c of document.querySelectorAll<HTMLElement>("pluto-cell.selected")) picks.push(targetPick({ part: "cell", cell: c, el: c }));
+      for (const c of document.querySelectorAll<HTMLElement>(dom().selected)) picks.push(targetPick({ part: "cell", cell: c, el: c }));
       text.focus();
     }
     refresh();
@@ -305,7 +306,7 @@ export function initAnnotate(answered = false): void {
     e.stopPropagation();
     const m = e as MouseEvent;
     if (e.type === "mousedown" && m.button === 0) {
-      const cell = target.closest<HTMLElement>("pluto-cell");
+      const cell = target.closest<HTMLElement>(dom().cell);
       const line = cell && !m.altKey ? lineAt(target, cell) : 0;
       drag = { x: m.clientX + window.scrollX, y: m.clientY + window.scrollY, moved: false, add: m.shiftKey, lines: line ? { cell: cell!, from: line, to: line } : undefined };
     }
@@ -357,7 +358,7 @@ export function initAnnotate(answered = false): void {
         const r = pageBox(c.getBoundingClientRect());
         return drawn!.left < r.right && r.left < drawn!.right && drawn!.top < r.bottom && r.top < drawn!.bottom;
       });
-      choose({ pick: { part: "box", cells: under.map((c) => c.id) }, box: drawn! }, done.add);
+      choose({ pick: { part: "box", cells: under.map(dom().id) }, box: drawn! }, done.add);
     },
     true,
   );

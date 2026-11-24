@@ -579,6 +579,7 @@ impl Workspace {
             PaneShows::Stopped(_) => "stopped",
             PaneShows::Crashed => "crashed",
             PaneShows::Opening => "opening",
+            PaneShows::PythonPreview => "python_preview",
             PaneShows::Page => "page",
         };
         let page = (shown == PaneShows::Page).then(|| {
@@ -587,7 +588,7 @@ impl Workspace {
             let reported = s.notebook.as_deref().is_some_and(|id| p.notebook == id);
             json!({
                 "notebook": s.notebook,
-                "backend": crate::viewed_notebook(&url).map(|(kind, _)| kind.name()),
+                "backend": crate::viewed_kind(&url).map(|kind| kind.name()),
                 "look": self.settings.notebook_theme,
                 "safe_preview": reported && p.safe,
                 "read_only": self.read_only(s),
@@ -809,6 +810,7 @@ fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value
         HostPane::JuliaStarting(step) => ("julia_starting", Some(step)),
         HostPane::JuliaFailed(reason) => ("julia_failed", Some(reason)),
         HostPane::RStarting(step) => ("r_starting", Some(step)),
+        HostPane::RFailed(reason) if kind == wire::backend::Backend::Marimo => ("python_failed", Some(reason)),
         HostPane::RFailed(reason) => ("r_failed", Some(reason)),
         HostPane::Stopping => ("stopping", None),
         HostPane::NotRunning(reason) => (if kind == wire::backend::Backend::Ember { "r_not_running" } else { "julia_not_running" }, Some(reason)),

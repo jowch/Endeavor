@@ -19,10 +19,22 @@ import { initRunGuard } from "./runguard";
 import { initReveal } from "./reveal";
 import { initSafe } from "./safe";
 import { initState } from "./state";
-import { initTheme } from "./theme";
+import { initTheme, initTokens } from "./theme";
+import { onMarimo } from "./engine";
 import { watchRedraws } from "./redraw";
 
+function initOnMarimo() {
+  initState();
+  initTokens();
+  initQuote();
+  initAskBox();
+  initAnnotate();
+  initDebug();
+  send({ type: "ready" });
+}
+
 function init() {
+  if (onMarimo()) return initOnMarimo();
   initState();
   initOutOfStep();
   initTheme();
