@@ -155,7 +155,7 @@ test("a Python notebook's failed install shows the failure box and the header's 
   await p.packages(null, { packages: ["endeavor_e2e_absent"], log });
   assert.equal(p.drawer(), "packages", "a failure opens Packages by itself, as an install does");
   assert.match(p.text(), /^Package failed · endeavor_e2e_absent/);
-  assert.match(p.text(), /endeavor_e2e_absent couldn't be installed: it isn't on PyPI/);
+  assert.match(p.text(), /endeavor_e2e_absent couldn't be installed: it isn't in the package index/);
   assert.equal(p.state().package_failed, "endeavor_e2e_absent");
   p.window.document.querySelector("#endeavor-drawer .failure .fix").dispatchEvent(new p.window.MouseEvent("click", { bubbles: true }));
   const fix = p.sent.find((m) => m.type === "fix_package");
@@ -211,6 +211,23 @@ test("an install marimo runs itself that fails shows uv's reason, and stays unti
   assert.equal(p.state().package_failed, "humanize", "the runtime didn't run this install, so its list doesn't clear it");
   await p.marimoSays("environment-operation", { ...operation({ kind: "succeeded" }, { humanize: "succeeded" }), operation_id: "later" });
   assert.equal(p.state().package_failed, null);
+});
+
+test("after marimo's own install has settled, a later install or failure the runtime reports still shows", async () => {
+  const p = await marimoPage();
+  await p.packages(null);
+  await p.marimoSays("environment-operation", operation({ kind: "running" }, { humanize: "running" }));
+  await p.marimoSays("environment-operation", operation({ kind: "failed", error: "Could not apply changes to humanize." }, { humanize: "failed" }));
+  assert.equal(p.state().package_failed, "humanize");
+  await p.packages({ step: "installing", packages: ["polars"] });
+  assert.deepEqual([p.state().installing, p.state().busy, p.state().package_failed], [true, "Installing packages", null]);
+  assert.match(p.text(), /polarsinstalling/);
+  await p.packages(null, { packages: ["polars"], log: "  ╰─▶ Because polars was not found in the package registry\n" });
+  assert.equal(p.state().package_failed, "polars");
+  assert.equal(p.drawer(), "packages");
+  await p.marimoSays("environment-operation", { ...operation({ kind: "succeeded" }, { six: "succeeded" }), operation_id: "later" });
+  await p.packages({ step: "installing", packages: ["boto3"] });
+  assert.equal(p.state().installing, true, "after a succeeded one too");
 });
 
 test("a page that reconnects mid-install picks it up from marimo's state", async () => {

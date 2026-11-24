@@ -57,7 +57,7 @@ test("a failed install names the package and gives uv's reason in plain words", 
   assert.equal(m.packages.find((p) => p.name === "endeavor_e2e_absent").state, "failed");
   assert.equal(m.headline, "Package failed · endeavor_e2e_absent");
   assert.equal(m.failure.name, "endeavor_e2e_absent");
-  assert.equal(m.failure.why, "couldn't be installed: it isn't on PyPI");
+  assert.equal(m.failure.why, "couldn't be installed: it isn't in the package index");
   assert.equal(m.failure.log, log);
   assert.equal(m.log, log);
 });
@@ -73,7 +73,7 @@ test("uv's reason is its first sentence joined across the lines uv wraps, withou
   const { failureReason } = await load();
   const log = "`uv --quiet add --script nb.py humanize==4.17.0` exited with code 1:\n× No solution found when resolving dependencies for split (markers:\n  │ python_full_version == '3.10.*'):\n  ╰─▶ Because the requested Python version (>=3.10) does not satisfy\n      Python>=3.11 and humanize==4.17.0 depends on Python>=3.11, we can\n      conclude that humanize==4.17.0 cannot be used.\n      And because you require humanize==4.17.0, we can conclude that your\n      requirements are unsatisfiable.\nFailed to install humanize\n";
   assert.equal(failureReason(log), "the requested Python version (>=3.10) does not satisfy Python>=3.11 and humanize==4.17.0 depends on Python>=3.11");
-  assert.equal(failureReason("  ╰─▶ Because notarealpkgzq was not found in the package registry and you\n      require notarealpkgzq, we can conclude that your requirements are\n      unsatisfiable.\n"), "it isn't on PyPI");
+  assert.equal(failureReason("  ╰─▶ Because notarealpkgzq was not found in the package registry and you\n      require notarealpkgzq, we can conclude that your requirements are\n      unsatisfiable.\n"), "it isn't in the package index");
   assert.equal(failureReason("error: Failed to fetch: https://pypi.org/simple/x/\n"), "error: Failed to fetch: https://pypi.org/simple/x/");
 });
 
@@ -92,4 +92,8 @@ test("marimo's install operations replace the runtime's install state while they
   const earlier = { ...ready, failed: { packages: ["Polars"], log: "" } };
   assert.equal(withLive(earlier, applyOperation(live, op("succeeded", { polars: "succeeded" }), "append")).failed, null);
   assert.ok(withLive(earlier, applyOperation(live, op("succeeded", { numpy: "succeeded" }), "append")).failed);
+  const settled = applyOperation(live, op("failed", { polars: "failed" }), "append");
+  const later = { ...ready, install: { step: "installing", packages: ["numpy"] } };
+  assert.deepEqual(plain(withLive(later, settled)), plain(later), "the runtime's own install beats a settled one");
+  assert.deepEqual(plain(withLive(earlier, settled)), plain(earlier), "and so does its own failure");
 });

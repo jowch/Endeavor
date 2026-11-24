@@ -3232,7 +3232,7 @@ footer form#feedback { display: none !important; }
   }
   function failureReason(log) {
     const text = plainLog(log);
-    if (/not found in the package registry/.test(text)) return "it isn't on PyPI";
+    if (/not found in the package registry/.test(text)) return "it isn't in the package index";
     const because = text.match(/╰─▶\s*([^]*?)(?:\n\s*\n|\n\S|$)/);
     if (!because) return lastLogLine(log);
     const said = because[1].split("\n").map((l) => l.trim()).join(" ");
@@ -3249,8 +3249,10 @@ footer form#feedback { display: none !important; }
     if (!live2) return raw2;
     const names2 = Object.keys(live2.packages);
     if (live2.status === "running") return { ...raw2, install: { step: "installing", packages: names2 }, failed: null };
+    if (raw2.install?.step === "installing") return raw2;
     const asking = raw2.install?.step === "asking" ? raw2.install : null;
     if (live2.status === "failed") {
+      if (raw2.failed) return raw2;
       const failed = names2.filter((n) => live2.packages[n] !== "succeeded");
       const log = [...Object.values(live2.logs), live2.error].filter(Boolean).join("\n");
       return { ...raw2, install: asking, failed: { packages: failed.length ? failed : names2, log } };

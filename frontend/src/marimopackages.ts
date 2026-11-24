@@ -31,7 +31,7 @@ export function lastLogLine(log: string): string {
 
 export function failureReason(log: string): string {
   const text = plainLog(log);
-  if (/not found in the package registry/.test(text)) return "it isn't on PyPI";
+  if (/not found in the package registry/.test(text)) return "it isn't in the package index";
   const because = text.match(/╰─▶\s*([^]*?)(?:\n\s*\n|\n\S|$)/);
   if (!because) return lastLogLine(log);
   const said = because[1].split("\n").map((l) => l.trim()).join(" ");
@@ -61,8 +61,10 @@ export function withLive(raw: MarimoEnvironment, live: LiveInstall | null): Mari
   if (!live) return raw;
   const names = Object.keys(live.packages);
   if (live.status === "running") return { ...raw, install: { step: "installing", packages: names }, failed: null };
+  if (raw.install?.step === "installing") return raw;
   const asking = raw.install?.step === "asking" ? raw.install : null;
   if (live.status === "failed") {
+    if (raw.failed) return raw;
     const failed = names.filter((n) => live.packages[n] !== "succeeded");
     const log = [...Object.values(live.logs), live.error].filter(Boolean).join("\n");
     return { ...raw, install: asking, failed: { packages: failed.length ? failed : names, log } };
