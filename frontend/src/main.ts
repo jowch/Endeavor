@@ -21,6 +21,7 @@ import { initSafe } from "./safe";
 import { initState } from "./state";
 import { initTheme, initTokens } from "./theme";
 import { onMarimo } from "./engine";
+import { initDismissResumedBanner } from "./reconnected";
 import { watchRedraws } from "./redraw";
 
 function initOnMarimo() {
@@ -29,6 +30,7 @@ function initOnMarimo() {
   initQuote();
   initAskBox();
   initAnnotate();
+  initDismissResumedBanner();
   initDebug();
   send({ type: "ready" });
 }
