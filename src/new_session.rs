@@ -40,12 +40,16 @@ impl NotebookChoice {
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
     match host {
         HostId::ThisMac if cfg!(windows) => &[Backend::Pluto],
-        HostId::ThisMac if SHOWS_PYTHON => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
+        host if shows_python(host) => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
         _ => &Backend::ALL,
     }
 }
 
 pub const SHOWS_PYTHON: bool = cfg!(not(windows));
+
+pub fn shows_python(host: &HostId) -> bool {
+    SHOWS_PYTHON && *host == HostId::ThisMac
+}
 
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);

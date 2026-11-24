@@ -62,9 +62,12 @@ pub fn set_notebook(bridge: &Bridge, owner: u64, path: &str) -> Result<(), Strin
     rpc(bridge, "endeavor/set_notebook", json!({ "owner": owner.to_string(), "notebook": path })).map(|_| ())
 }
 
-pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend) -> Result<(), String> {
-    let kind = crate::new_session::kind_name(kind);
-    rpc(bridge, "endeavor/set_session_folder", json!({ "owner": owner.to_string(), "folder": folder, "kind": kind, "shows_python": crate::new_session::SHOWS_PYTHON })).map(|_| ())
+pub fn set_session_folder(bridge: &Bridge, owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> Result<(), String> {
+    rpc(bridge, "endeavor/set_session_folder", session_folder_params(owner, folder, kind, host)).map(|_| ())
+}
+
+fn session_folder_params(owner: u64, folder: &str, kind: Backend, host: &crate::hosts::HostId) -> serde_json::Value {
+    json!({ "owner": owner.to_string(), "folder": folder, "kind": crate::new_session::kind_name(kind), "shows_python": crate::new_session::shows_python(host) })
 }
 
 pub fn set_folder(bridge: &Bridge, dir: &str) -> Result<(), String> {
@@ -687,6 +690,15 @@ mod tests {
         assert_eq!(until_julia(|| super::answer(answers.borrow_mut().pop().unwrap()), &|_| {}), Ok(json!({ "ran": true })));
         let failed: Result<(), String> = until_julia(|| Err("julia_failed::no".into()), &|_| panic!("not starting"));
         assert_eq!(failed, Err("julia_failed::no".into()));
+    }
+
+    #[test]
+    fn only_this_computers_sessions_say_they_show_python() {
+        let here = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::ThisMac);
+        assert_eq!(here["shows_python"], crate::new_session::SHOWS_PYTHON);
+        assert_eq!((here["owner"].as_str(), here["kind"].as_str()), (Some("7"), Some("python")));
+        let server = super::session_folder_params(7, "/p", Backend::Marimo, &crate::hosts::HostId::Server("lab".into()));
+        assert_eq!(server["shows_python"], false);
     }
 
     #[test]

@@ -1535,7 +1535,7 @@ impl Workspace {
         let Some(bridge) = self.session_bridge(key) else { return };
         let Some((host, folder, kind)) = self.sessions.iter().find(|s| s.key == key).map(|s| (s.place.host.clone(), s.place.path.clone(), s.kind)) else { return };
         self.note_session_kind(&host, key, kind);
-        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
+        cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &host) }).detach();
     }
 
     fn send_binding(&self, key: u64, path: String, cx: &mut Context<Self>) {

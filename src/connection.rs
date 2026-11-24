@@ -1149,7 +1149,8 @@ impl Workspace {
         for (key, folder, kind) in folders {
             self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
-            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
+            let on = host.clone();
+            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &on) }).detach();
         }
         for (key, policy, edits) in policies {
             self.send_policy(key, policy, edits, cx);
