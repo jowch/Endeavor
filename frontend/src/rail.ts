@@ -81,13 +81,28 @@ function contentTop(cell: HTMLElement, s: HTMLElement): number {
   return cell.getBoundingClientRect().top - outer + s.scrollTop;
 }
 
+const PAGE_CONTROLS_ABOVE = "[data-testid=chrome-controls-top-right]";
+const PAGE_CONTROLS_BELOW = "[data-testid=chrome-controls-bottom-right]";
+const CLEAR_OF_CONTROLS = 8;
+
+function besideRail(selector: string, left: number): DOMRect | null {
+  const el = document.querySelector(selector);
+  const r = el?.getBoundingClientRect();
+  return r && r.height > 0 && r.right > left - CLEAR_OF_CONTROLS ? r : null;
+}
+
 function place(): { s: HTMLElement; height: number; total: number } {
   const s = scroller();
   const f = frame(s);
   const gap = f.classic ? CLASSIC_GAP : OVERLAY_GAP;
-  const height = Math.max(f.height - 20, 0);
-  rail.style.left = `${f.contentRight - gap - (WIDTH + 8)}px`;
-  rail.style.top = `${f.top + 10}px`;
+  const left = f.contentRight - gap - (WIDTH + 8);
+  const above = besideRail(PAGE_CONTROLS_ABOVE, left);
+  const below = besideRail(PAGE_CONTROLS_BELOW, left);
+  const top = Math.max(f.top + 10, above ? above.bottom + CLEAR_OF_CONTROLS : 0);
+  const bottom = Math.min(f.top + f.height - 10, below ? below.top - CLEAR_OF_CONTROLS : Infinity);
+  const height = Math.max(bottom - top, 0);
+  rail.style.left = `${left}px`;
+  rail.style.top = `${top}px`;
   rail.style.height = `${height}px`;
   return { s, height, total: Math.max(s.scrollHeight, 1) };
 }

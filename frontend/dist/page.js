@@ -1477,13 +1477,26 @@ ${text.value}` : sent.comment;
     const outer = s === document.scrollingElement || s === document.documentElement ? 0 : s.getBoundingClientRect().top;
     return cell.getBoundingClientRect().top - outer + s.scrollTop;
   }
+  var PAGE_CONTROLS_ABOVE = "[data-testid=chrome-controls-top-right]";
+  var PAGE_CONTROLS_BELOW = "[data-testid=chrome-controls-bottom-right]";
+  var CLEAR_OF_CONTROLS = 8;
+  function besideRail(selector, left) {
+    const el2 = document.querySelector(selector);
+    const r = el2?.getBoundingClientRect();
+    return r && r.height > 0 && r.right > left - CLEAR_OF_CONTROLS ? r : null;
+  }
   function place() {
     const s = scroller();
     const f = frame2(s);
     const gap = f.classic ? CLASSIC_GAP : OVERLAY_GAP;
-    const height2 = Math.max(f.height - 20, 0);
-    rail.style.left = `${f.contentRight - gap - (WIDTH + 8)}px`;
-    rail.style.top = `${f.top + 10}px`;
+    const left = f.contentRight - gap - (WIDTH + 8);
+    const above = besideRail(PAGE_CONTROLS_ABOVE, left);
+    const below = besideRail(PAGE_CONTROLS_BELOW, left);
+    const top = Math.max(f.top + 10, above ? above.bottom + CLEAR_OF_CONTROLS : 0);
+    const bottom = Math.min(f.top + f.height - 10, below ? below.top - CLEAR_OF_CONTROLS : Infinity);
+    const height2 = Math.max(bottom - top, 0);
+    rail.style.left = `${left}px`;
+    rail.style.top = `${top}px`;
     rail.style.height = `${height2}px`;
     return { s, height: height2, total: Math.max(s.scrollHeight, 1) };
   }
