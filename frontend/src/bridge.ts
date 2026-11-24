@@ -2,6 +2,7 @@ import type { Pick } from "./quote";
 
 export type ToApp =
   | { type: "ready" }
+  | { type: "out_of_step" }
   | { type: "mode"; on: boolean }
   | { type: "quote"; notebook: string | null; picks: Pick[]; comment: string; add: boolean; ref?: number }
   | { type: "shoot"; id: number; rect: { x: number; y: number; width: number; height: number } }

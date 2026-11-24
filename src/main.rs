@@ -1985,6 +1985,7 @@ impl Workspace {
                 self.apply_look(cx);
                 self.sync_page_context(cx);
             }
+            Some(annotate::Message::OutOfStep) => self.on_out_of_step(cx),
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
             Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),

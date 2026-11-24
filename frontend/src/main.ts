@@ -13,6 +13,7 @@ import { initQuote } from "./quote";
 import { initReadonly } from "./readonly";
 import { initErrors } from "./errors";
 import { initFolded } from "./folded";
+import { initOutOfStep } from "./outofstep";
 import { initRail } from "./rail";
 import { initRunGuard } from "./runguard";
 import { initReveal } from "./reveal";
@@ -35,6 +36,7 @@ function initOnMarimo() {
 function init() {
   if (onMarimo()) return initOnMarimo();
   initState();
+  initOutOfStep();
   initTheme();
   initQuote();
   initAskBox();
