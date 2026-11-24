@@ -85,8 +85,10 @@ on every connect and Julia is slow to start, and it does not rely on `socat`
 or Python being installed. On the Mac itself the app runs its own binary as
 the helper (`endeavor --helper connect …`; the helper is a library the app
 links), so the local helper can't be missing or from another build; the
-separate `endeavor` binary (on macOS, the app's `endeavor-helper` target) is
-what servers are sent. It:
+separate `endeavor` binary (on macOS, the app's `endeavor-helper` target,
+which `scripts/bundle.sh` puts in the app's `helpers/darwin-<arch>/`) is
+what servers are sent; tests run it too, since a test binary can't be the
+helper. It:
 
 1. Says hello with the machine's name and home folder, and from then on
    answers file requests itself, without Julia: list a folder (folders and

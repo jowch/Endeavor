@@ -1,9 +1,3 @@
-//! A GPUI menu over the notebook. The notebook's web view is a native view on top
-//! of everything GPUI draws, so a menu drawn there would be hidden and its clicks
-//! would go to the page. While one is open, the web view gets a hole where the
-//! menu is: its layer is masked there, and clicks there go to GPUI. A menu, a
-//! tip and a tooltip can each have a hole at the same time.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -89,8 +83,6 @@ impl CGRect {
 pub use crate::layer::Hole;
 
 impl Hole {
-    /// The corner radius of what the hole is cut for, so the notebook shows
-    /// right up to its rounded corners.
     fn radius(self) -> f64 {
         match self {
             Hole::Menu | Hole::Tip => 8.,
@@ -102,16 +94,10 @@ impl Hole {
     }
 }
 
-/// The open holes, in the web view's coordinates from its top-left corner, and
-/// the web view (an address: it lives as long as the app).
 struct Holes {
     rects: Vec<(Hole, CGRect)>,
     view: usize,
-    /// The cell picture's second web view while there is one (`set_second`), 0 otherwise.
     second: usize,
-    /// A menu or popover is open somewhere (not necessarily over the web
-    /// view): a mouse-down anywhere on the web view, not only in a hole,
-    /// goes to GPUI too, so its own click-outside handling can close it.
     dismiss: bool,
 }
 
@@ -119,10 +105,8 @@ static HOLES: Mutex<Holes> = Mutex::new(Holes { rects: Vec::new(), view: 0, seco
 
 type SendEvent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 static GPUI_SEND_EVENT: OnceLock<SendEvent> = OnceLock::new();
-/// A mouse-down went to GPUI's view (`send_event`), and its mouse-up hasn't come yet.
 static ROUTED_PRESS: AtomicBool = AtomicBool::new(false);
 
-// NSEventType values.
 const LEFT_DOWN: usize = 1;
 const LEFT_UP: usize = 2;
 const RIGHT_DOWN: usize = 3;
@@ -130,14 +114,6 @@ const RIGHT_UP: usize = 4;
 const LEFT_DRAGGED: usize = 6;
 const SCROLL_WHEEL: usize = 22;
 
-/// Clicks in the hole go straight to GPUI's view. The web view claims them
-/// otherwise, even when it declines to hit-test there (WebKit's gesture
-/// recognizers take mouse-downs over the whole view). While `dismiss` holds,
-/// a mouse-down anywhere on the web view goes to GPUI the same way, so a menu
-/// or popover open elsewhere in the window hears it and closes, the way a
-/// native menu closes for a click anywhere outside it. A wheel turn in a hole
-/// goes to GPUI too (never for `dismiss`), so what the hole shows can scroll,
-/// such as a notice's long Details.
 unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
     unsafe {
         let (rects, view, dismiss) = {
@@ -171,10 +147,6 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let hidden = hidden.as_bool();
             crate::click_log::note(|| format!("window {} at page {:.0},{:.0} in holes {holes:?} dismiss {dismiss} page hidden {hidden} keys in page {in_page} input context {context}", if kind == LEFT_DOWN { "down" } else { "up" }, local.x, y));
         }
-        // A press that went to GPUI keeps going there until it ends, wherever the pointer is
-        // and whatever opened or closed meanwhile: AppKit sends a mouse-up only to the view that
-        // took its mouse-down, and the window never saw that one (#282).
-        // A new press starts afresh, so one whose mouse-up never came doesn't take the next one's.
         let routed = !matches!(kind, LEFT_DOWN | RIGHT_DOWN) && ROUTED_PRESS.load(Ordering::Relaxed);
         if matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
             ROUTED_PRESS.store(false, Ordering::Relaxed);
@@ -194,7 +166,6 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             }
             return;
         }
-        // A hidden web view (under a modal dialog) takes no clicks: AppKit gives them to GPUI.
         let hidden = view != 0 && {
             let hidden: Bool = msg_send![view as *mut AnyObject, isHiddenOrHasHiddenAncestor];
             hidden.as_bool()
@@ -206,13 +177,11 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
             let flipped: Bool = msg_send![view, isFlipped];
             let bounds: CGRect = msg_send![view, bounds];
             let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
-            // A tip or tooltip only shows over the page: a wheel turn there still scrolls the page.
             let in_hole = rects.iter().any(|(hole, rect)| rect.contains(local.x, y) && !(is_wheel && matches!(hole, Hole::Tip | Hole::Tooltip)));
             let in_view = local.x >= 0. && local.x < bounds.size.width && y >= 0. && y < bounds.size.height;
             let dismiss_click = dismiss && matches!(kind, LEFT_DOWN | RIGHT_DOWN) && in_view;
             if in_hole || dismiss_click {
                 let gpui: *mut AnyObject = msg_send![view, superview];
-                // A click on what GPUI draws there is GPUI's, as a click outside the web view is (#282).
                 if in_hole && matches!(kind, LEFT_DOWN | RIGHT_DOWN) {
                     take_keys(view, gpui, false);
                 }
@@ -239,11 +208,6 @@ unsafe extern "C-unwind" fn send_event(window: *mut AnyObject, cmd: Sel, event: 
     }
 }
 
-/// Make GPUI's view the window's first responder if the web view, or a view inside it, is. While
-/// the page holds it, clicks on GPUI's controls over the page were lost on the Mac until a click
-/// landed outside the web view (#282). AppKit does this for a click that reaches GPUI's view
-/// itself; one routed through a hole, or a dialog opened over the page, has to do it here.
-/// `later` makes it on the run loop's next turn, for a caller inside GPUI's paint.
 unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
     unsafe {
         let window: *mut AnyObject = msg_send![view, window];
@@ -262,10 +226,6 @@ unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
         if !inside.as_bool() {
             return;
         }
-        // GPUI's view hands each mouse-down to its text input context first (for input
-        // methods). AppKit switches the current context only as an event goes through the
-        // window's own sendEvent, which a click routed through a hole skips, so the page's
-        // stayed current: make GPUI's the current one too.
         let context: *mut AnyObject = msg_send![gpui, inputContext];
         if later {
             let _: () = msg_send![window, performSelector: sel!(makeFirstResponder:), withObject: gpui, afterDelay: 0.0f64];
@@ -281,7 +241,6 @@ unsafe fn take_keys(view: *mut AnyObject, gpui: *mut AnyObject, later: bool) {
     }
 }
 
-/// Route GPUI's window events through `send_event`. Idempotent.
 fn install_send_event() {
     if GPUI_SEND_EVENT.get().is_some() {
         return;
@@ -296,8 +255,6 @@ fn install_send_event() {
     }
 }
 
-/// Everything in a `w` by `h` area but `holes` (all from the top-left), as
-/// rectangles: the cells of the grid their edges make that no hole covers.
 fn around(w: f64, h: f64, holes: &[CGRect]) -> Vec<CGRect> {
     let edges = |ends: fn(&CGRect) -> [f64; 2], max: f64| {
         let mut at: Vec<f64> = holes.iter().flat_map(ends).map(|v| v.clamp(0., max)).chain([0., max]).collect();
@@ -319,8 +276,6 @@ fn around(w: f64, h: f64, holes: &[CGRect]) -> Vec<CGRect> {
     cells
 }
 
-/// Everything in `bounds` but `holes` (all from the top-left, each with its
-/// corner radius), as a mask layer.
 unsafe fn mask_around(bounds: CGRect, holes: &[(CGRect, f64)], flipped: bool) -> *mut AnyObject {
     unsafe {
         let (w, h) = (bounds.size.width, bounds.size.height);
@@ -364,9 +319,6 @@ unsafe fn mask_around(bounds: CGRect, holes: &[(CGRect, f64)], flipped: bool) ->
     }
 }
 
-/// The parts of each hole outside its rounded corners, as polygons from the
-/// top-left: the web view shows there again. A corner that another hole
-/// overlaps stays cut, since that hole's content is drawn there.
 fn corner_slivers(holes: &[(CGRect, f64)]) -> Vec<Vec<(f64, f64)>> {
     const STEPS: usize = 8;
     let mut out = Vec::new();
@@ -398,9 +350,6 @@ fn cg_rect(b: Bounds<Pixels>) -> CGRect {
     CGRect::new(f64::from(b.origin.x), f64::from(b.origin.y), f64::from(b.size.width), f64::from(b.size.height))
 }
 
-/// A menu or popover open anywhere in the window, so a mouse-down on the web
-/// view should reach GPUI even outside any hole: the shared click-outside
-/// mechanism every menu and popover uses (`Workspace::dismissible_open`).
 pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
     use wry::WebViewExtMacOS;
     let view = webview.webview();
@@ -413,8 +362,6 @@ pub fn set_dismiss_on_click(webview: &wry::WebView, active: bool) {
     install_send_event();
 }
 
-/// Dim the web view as the scrim behind a panel dims the rest of the window:
-/// drawn at 38% over the scrim, it matches a 62% black layer over it.
 pub fn set_dimmed(webview: &wry::WebView, dimmed: bool) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use wry::WebViewExtMacOS;
@@ -430,8 +377,6 @@ pub fn set_dimmed(webview: &wry::WebView, dimmed: bool) {
     }
 }
 
-/// Cut `owner`'s hole in the web view at `hole` (relative to the web view's
-/// top-left corner), or close it with None. Other holes stay.
 pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>>) {
     use wry::WebViewExtMacOS;
     let view = webview.webview();
@@ -445,8 +390,6 @@ pub fn set_hole(webview: &wry::WebView, owner: Hole, hole: Option<Bounds<Pixels>
         if holes.rects == before {
             return;
         }
-        // A dialog opened over the page takes the keys from it, so its fields and buttons work
-        // from the first click (#282). A menu, tip or notice leaves them: the user may be typing.
         let opened = |o: Hole| !before.iter().any(|(b, _)| *b == o) && holes.rects.iter().any(|(r, _)| *r == o);
         take = opened(Hole::Settings) || opened(Hole::Confirm);
         holes.view = view;
@@ -469,10 +412,6 @@ fn with_radii(rects: &[(Hole, CGRect)]) -> Vec<(CGRect, f64)> {
     rects.iter().map(|(owner, rect)| (*rect, owner.radius())).collect()
 }
 
-/// The cell picture's second web view (`cell_shot`), kept at the user's view's frame just
-/// behind it, or None once it goes. Every hole cut in the user's view is cut in it too, in
-/// the same call, so it never shows where GPUI draws a menu, a notice or a tip. Called
-/// again after its frame changes, since its mask is drawn for its bounds.
 pub fn set_second(other: Option<&wry::WebView>) {
     use wry::WebViewExtMacOS;
     let second = other.map_or(0, |v| &*v.webview() as *const _ as *mut AnyObject as usize);
@@ -486,7 +425,6 @@ pub fn set_second(other: Option<&wry::WebView>) {
     }
 }
 
-/// Mask the web view's layer around `holes`, or not at all when there are none.
 unsafe fn mask(view: *mut AnyObject, holes: &[(CGRect, f64)]) {
     unsafe {
         let layer: *mut AnyObject = msg_send![view, layer];
@@ -520,7 +458,6 @@ mod tests {
         let tip = CGRect::new(100., 10., 400., 50.);
         let tooltip = CGRect::new(450., 0., 100., 20.);
         let visible = around(1000., 800., &[tip, tooltip]);
-        // 400×50 and 100×20 less the 50×10 they share.
         assert_eq!(area(&visible), 1000. * 800. - 21_500.);
         assert!(visible.iter().all(|cell| !cell.contains(120., 30.) && !cell.contains(540., 5.)));
         assert!(visible.iter().any(|cell| cell.contains(50., 30.)));

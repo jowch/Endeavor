@@ -1,8 +1,3 @@
-//! The shared in-app confirm dialog: Stop a host, Cancel a queued job, Repair
-//! Julia, Sign out and Delete session all ask through this now, instead of a
-//! macOS alert (`window.prompt`). One at a time; opening a second replaces
-//! the first as if it had been cancelled, though nothing today does that.
-
 use std::rc::Rc;
 
 use gpui::*;
@@ -19,18 +14,11 @@ pub struct Confirm {
     on_confirm: Rc<dyn Fn(&mut Workspace, &mut Window, &mut Context<Workspace>)>,
     focus_cancel: FocusHandle,
     focus_action: FocusHandle,
-    /// Anchors the Tab trap; never itself focused or a tab stop.
     container_focus: FocusHandle,
-    /// Focus to return to once this closes, either way.
     restore: Option<FocusHandle>,
 }
 
 impl Workspace {
-    /// Ask before an action a macOS alert used to gate. `title` names what's
-    /// affected ("Stop notebooks on lab-server?"), `body` is one or two lines
-    /// saying what closes and what stays, `action_label` is the primary
-    /// button; Cancel is always the other. Confirming runs `on_confirm` and
-    /// closes the dialog; Esc, Cancel or a click outside just closes it.
     pub(crate) fn open_confirm(
         &mut self,
         title: impl Into<SharedString>,
@@ -56,7 +44,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Close without acting, as Esc, Cancel or a click outside does.
     pub(crate) fn close_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(confirm) = self.confirm.take() else { return };
         if let Some(restore) = confirm.restore {
@@ -80,9 +67,6 @@ impl Workspace {
             .id("confirm-dialog")
             .role(Role::Dialog)
             .aria_label(confirm.title.clone())
-            // Tab and ⇧⇥ still come from gpui_component::Root's own bindings;
-            // this just tells Root's handler to cycle back at this
-            // container's edge instead of leaving it (gpui_base's FocusTrap).
             .focus_trap("confirm-dialog", &confirm.container_focus)
             .occlude()
             .relative()
@@ -133,8 +117,6 @@ impl Workspace {
                 .justify_center()
                 .occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_dismissible(window, cx)))
-                // Above the web view like Settings: a hole cut where the card is, so
-                // its own hit-testing wins there instead of the native view's.
                 .child(layer::cut(card, Hole::Confirm, Some(self.webview.read(cx)).filter(|w| w.visible())))
                 .into_any_element(),
         )

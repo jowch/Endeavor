@@ -1,13 +1,3 @@
-//! Debug builds only: what's on screen, as JSON, for scripts that check the
-//! app without reading screenshots (scripts/app-state.sh; docs/testing.md).
-//!
-//! With `ENDEAVOR_STATE_REQUEST` and `ENDEAVOR_STATE_OUT` set, the app looks
-//! for the request file five times a second. When it's there, the app deletes
-//! it, asks the notebook page for its part, and writes the dump to a temporary
-//! file renamed to `ENDEAVOR_STATE_OUT`, so a reader never sees half a dump.
-//! Everything here reads the state the views draw from, through the helpers
-//! the views use themselves.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,7 +16,6 @@ use crate::transcript;
 use crate::agent::Agent;
 use crate::{Row, Workspace, runs};
 
-/// Wraps the page's `alert` to record what it showed, then shows it as before.
 pub const RECORD_ALERTS: &str = r#"(() => {
   const alerts = [];
   const shown = window.alert;
@@ -37,11 +26,9 @@ pub const RECORD_ALERTS: &str = r#"(() => {
   };
 })();"#;
 
-/// How long the page gets to answer before the dump goes without it.
 const PAGE_WAIT: Duration = Duration::from_secs(2);
 
 impl Workspace {
-    /// Answer state requests for the life of the window, if the switches are set.
     pub fn watch_state_requests(&mut self, cx: &mut Context<Self>) {
         let (Some(request), Some(out)) = (std::env::var_os("ENDEAVOR_STATE_REQUEST"), std::env::var_os("ENDEAVOR_STATE_OUT")) else { return };
         let (request, out) = (PathBuf::from(request), PathBuf::from(out));
@@ -72,7 +59,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Ask the notebook page what it shows, if it's on screen.
     fn ask_page(&mut self, cx: &mut Context<Self>) -> Option<oneshot::Receiver<Value>> {
         if !self.webview.read(cx).visible() {
             return None;
@@ -83,25 +69,18 @@ impl Workspace {
         Some(rx)
     }
 
-    /// The page's answer to `ask_page`.
     pub fn on_page_debug(&mut self, page: Value) {
         if let Some(tx) = self.page_debug.take() {
             let _ = tx.send(page);
         }
     }
 
-    /// Null unless a turn hit `agent`'s usage limit.
     fn usage_limit_state(&self, agent: Agent) -> Value {
         json!(self.usage_limits.get(agent).map(|l| json!({
             "resets_in_secs": l.until.map(|at| at.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_secs()),
         })))
     }
 
-    /// Julia on this computer: which Julia Settings ask for (`preference`), what the runtime was
-    /// started with (`started_with`, the app's choice then) and the Julia it says it started (`running`), the line Settings show (`line`) and whether a change needs a restart (`changed`), the user's own Julia as found (`yours`), what its runtime last said (`julia_status`; null
-    /// from a runtime too old to say, or none running), and Endeavor's own
-    /// Julia as Settings last found it, with an Install or Remove under way.
-    /// `failed` is the failure the pane shows, with Try again.
     fn julia_here_state(&self) -> Value {
         use crate::pluto::JuliaStatus;
         let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_status.as_ref()).map(|s| match s {
@@ -116,7 +95,6 @@ impl Workspace {
             Some(Some(own)) => json!({ "julia": own.julia, "from": format!("{:?}", own.from) }),
         };
         let failed = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_failed.clone());
-        // Which Julia Settings ask for, and the user's own as Settings last found it (null until looked).
         let preference = format!("{:?}", self.settings.julia_preference());
         let yours = match &self.settings_checks.users_julia {
             None => json!(null),
@@ -125,15 +103,10 @@ impl Workspace {
             Some(Some(Err(why))) => json!({ "unusable": why }),
         };
         let started = self.settings_checks.local_julia.as_ref().map(|p| format!("{p:?}"));
-        // The Julia the runtime says it started (null before it has, or from a runtime too old to say).
         let running = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.julia_started.as_ref()).map(|s| json!({ "julia": s.path, "version": s.version, "endeavors": s.endeavors }));
         json!({ "status": status, "failed": failed, "own": own, "job": self.own_julia.job.as_ref().map(|j| format!("{j:?}")), "preference": preference, "started_with": started, "yours": yours, "running": running, "line": self.julia_line_text(), "changed": self.julia_changed() })
     }
 
-    /// R on this computer: the R setting, Endeavor's own R as Settings last
-    /// found it with an Install or Remove under way, where it's offered, what
-    /// the runtime last said of R's setup (`r_status`; null from a runtime too
-    /// old to say), and the failure the pane shows.
     fn r_here_state(&self) -> Value {
         use crate::pluto::RStatus;
         let status = self.connections.get(&crate::hosts::HostId::ThisMac).and_then(|c| c.r_status.as_ref()).map(|s| match s {
@@ -161,7 +134,6 @@ impl Workspace {
             "r_here": self.r_here_state(),
             "claude": {
                 "started": self.links.get(Agent::Claude).rx.is_none(),
-                // About's Claude Code adapter row: Current, Installing("…"), Available("…") or Later.
                 "adapter": format!("{:?}", self.updates().adapter),
                 "state": state_name(&self.links.get(Agent::Claude).process.state),
                 "connected": self.links.get(Agent::Claude).ready,
@@ -195,7 +167,6 @@ impl Workspace {
             },
             "composer": self.composer_state(active, cx),
             "settings": self.settings_debug(cx),
-            // ⌘= / ⌘− / ⌘0: which pane they size now, and each pane's size (1 is 100%).
             "zoom": {
                 "target": if self.zooms_chat(None, cx) { "chat" } else { "notebook" },
                 "notebook": if self.settings.zoom > 0. { self.settings.zoom } else { 1. },
@@ -238,7 +209,6 @@ impl Workspace {
     }
 
     fn window_state(&self) -> Value {
-        // The one on top (main.rs draws them in this order).
         let modal = if !self.asks.is_empty() {
             Some("ssh_prompt")
         } else if self.login_node_warning.is_some() {
@@ -260,7 +230,6 @@ impl Workspace {
         });
         let screen = match &self.setup {
             _ if self.missing_files.is_some() => "missing_files",
-            // The choice of assistant, or Claude's sign-in once Claude is picked.
             Some(s) if self.offline_since.is_none() && s.agent.is_none() => "sign_in",
             Some(s) if self.offline_since.is_none() && s.agent == Some(crate::agent::Agent::Claude) && matches!(&self.account, Account::SignedOut(stage) if !matches!(stage, Stage::Expired)) => "sign_in",
             Some(_) => "splash",
@@ -292,15 +261,10 @@ impl Workspace {
             Stage::Waiting(_) => "waiting_for_browser",
             Stage::Failed { .. } => "failed",
         };
-        // The card above the composer: not on the setup screen, nor while offline.
         let card = self.setup.is_none() && self.offline_since.is_none();
         json!({ "account": "signed_out", "stage": stage, "card": card })
     }
 
-    /// A sidebar row's dump: its title, whether it's open or past and
-    /// active, its mark (`needs_approval`, `archived`, or none), and whether
-    /// it failed. Reads the same helpers the sidebar's own rendering does
-    /// (`row_title`, `row_mark`, `row_session_id`), so the dump follows it.
     fn row_debug(&self, row: &Row) -> Value {
         let title = self.row_title(row).unwrap_or_default();
         let open = matches!(row, Row::Open(_));
@@ -331,9 +295,6 @@ impl Workspace {
         let filters = &self.settings.sidebar_filters;
         let show_empty = filters.show_empty_folders;
         let group_by_none = filters.group_by == crate::sidebar_filter::GroupBy::None;
-        // Group by None: one heading-less entry with every row, flattened and
-        // sorted the same way `render_session_bar` builds it, so the dump
-        // can't drift from what's on screen.
         let folders: Vec<Value> = if group_by_none {
             let mut rows: Vec<(Row, String)> = self
                 .sidebar_folders()
@@ -399,7 +360,6 @@ impl Workspace {
             "chips": chips,
             "notebook_kind": crate::new_session::kind_name(self.draft.notebook.kind()),
             "new_notebook_kinds": crate::new_session::new_kinds(&self.draft.host).iter().map(|&k| crate::new_session::new_notebook_label(k)).collect::<Vec<_>>(),
-            // The folder's notebooks the chip's menu lists, newest first.
             "notebooks": self.draft.notebooks.iter().map(|f| json!({ "file": self.draft.host.folder_name(&f.path), "language": crate::new_session::language_name(f.backend) })).collect::<Vec<_>>(),
             "mode": self.mode_label(None),
             "notice": self.draft.notice.as_ref().map(|n| n.to_string()),
@@ -461,8 +421,6 @@ impl Workspace {
         })
     }
 
-    /// The transcript's entries as drawn, in order: a run of tool calls is
-    /// one entry, the pinned plan and pending prompts aren't in it.
     fn transcript(&self, s: &Session) -> Vec<Value> {
         let mut out = Vec::new();
         let mut ix = 0;
@@ -527,7 +485,6 @@ impl Workspace {
                         "removed": c.removed,
                         "shows": c.change != CellChange::Deleted,
                     })).collect::<Vec<_>>(),
-                    // Restore: null when the card has nothing to put back.
                     "restore": s.restore_footer(ix).map(|(line, pressable)| json!({
                         "state": match s.restore_state(ix) {
                             None | Some(session::Restore::Changed(_) | session::Restore::Failed(_)) if s.restore_blocked(ix).is_some() => "blocked",
@@ -650,7 +607,6 @@ impl Workspace {
         })
     }
 
-    /// The notebook pane before a session starts.
     fn draft_pane_state(&self, cx: &App) -> Value {
         let header = match &self.draft.notebook {
             NotebookChoice::New(kind) => crate::new_session::new_notebook_label(*kind).to_string(),
@@ -734,7 +690,6 @@ impl Workspace {
     }
 }
 
-/// A tool call or a stretch of thinking, as its row reads.
 fn state_name(state: &crate::agent_process::State) -> &'static str {
     match state {
         crate::agent_process::State::Up => "up",
@@ -770,9 +725,6 @@ fn row(s: &Session, ix: usize, in_run: bool) -> Value {
     }
 }
 
-/// Where the transcript is scrolled: the list's top item and the offset into
-/// it, the offset from the top in pixels (by the heights the list knows), and
-/// each item in view as `[entry index, top from the viewport's top, height]`.
 fn scroll_state(s: &Session) -> Value {
     let top = s.list.logical_scroll_top();
     let viewport = s.list.viewport_bounds();
@@ -792,7 +744,6 @@ fn scroll_state(s: &Session) -> Value {
     })
 }
 
-/// The row under a message, shown on hover: its Copy button, and the time as it reads.
 fn message_actions(copy: bool, at: Option<std::time::SystemTime>, copied: bool) -> Value {
     json!({ "copy": copy.then_some(if copied { "Copied" } else { "Copy message" }), "time": at.map(crate::when::ago) })
 }
@@ -801,8 +752,6 @@ fn plan_items(entries: &[agent_client_protocol::schema::v1::PlanEntry]) -> Vec<V
     entries.iter().map(|e| json!({ "text": e.content, "status": format!("{:?}", e.status).to_lowercase() })).collect()
 }
 
-/// The quotes among a message's attachments: where each is from, what it
-/// quotes (null for a picture), whether it has a picture, and the comment.
 fn quotes(attachments: &[crate::attach::Attachment]) -> Vec<Value> {
     attachments
         .iter()
@@ -817,10 +766,6 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
     a.label().text()
 }
 
-/// The pane of a host that isn't ready: "cant_reach", "starting",
-/// "julia_starting" (with the step), "julia_failed", "r_starting" (with the
-/// step), "r_failed" (with the code: `r_not_found::…` offers Install R on a Mac), "stopping",
-/// "julia_not_running" ("r_not_running" for an R session's), "replaced" or "not_connected", the host, and why.
 fn host_pane(pane: &HostPane, host: &str, kind: wire::backend::Backend) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),

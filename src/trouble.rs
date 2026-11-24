@@ -1,31 +1,17 @@
-//! Why a turn ended without its answer, in Endeavor's words, from what Claude
-//! Code's adapter reports: an error kind (`errorKind` in the error's data) and
-//! its message. A usage limit is waiting, not failing: its reset time is read
-//! from the message, and the line above the composer counts down to it.
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agent::Agent;
 
-/// What stopped a turn, as the chat tells it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Trouble {
-    /// Claude's sign-in ran out.
     SignIn,
-    /// The account's usage limit: the message waits until it resets.
     UsageLimit(Option<Reset>),
-    /// Anthropic's servers are overloaded.
     Busy,
-    /// Too many requests in a short time (not the account's usage limit).
     RateLimited,
-    /// The connection to Claude dropped.
     Connection,
-    /// Any other error from Claude's side.
     Server,
 }
 
-/// Claude Code's own openings for a message about the account's usage, as the
-/// SDK's `USAGE_LIMIT_ERROR_PREFIXES` lists them, and the older CLI's.
 const USAGE_LIMIT: [&str; 9] = [
     "You've hit your",
     "You've reached your",
@@ -51,8 +37,6 @@ const CONNECTION: [&str; 10] = [
     "request timed out",
 ];
 
-/// The error's own words: the adapter's "Internal error: " and Claude Code's
-/// "API Error: " come off.
 pub fn error_text(message: &str) -> &str {
     let text = message.trim();
     let text = text.strip_prefix("Internal error: ").unwrap_or(text);
@@ -88,7 +72,6 @@ pub fn classify(kind: Option<&str>, message: &str) -> Trouble {
 }
 
 impl Trouble {
-    /// The card's reason, for a turn that got no reply.
     pub fn reason(&self, agent: Agent) -> &'static str {
         match self {
             Trouble::Busy => match agent {
@@ -103,24 +86,15 @@ impl Trouble {
     }
 }
 
-/// When a usage limit resets, as Claude Code's message says it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Reset {
-    /// A local clock time ("3pm", "3:30pm"): the next time it comes round. With
-    /// a date ("Oct 3, 3pm") when it's more than a day away.
     At { date: Option<(u32, u32, Option<i32>)>, hour: u32, minute: u32 },
-    /// Unix seconds, as the older CLI wrote it ("Claude AI usage limit reached|1759258800").
     Unix(i64),
-    /// Seconds from when the message came ("try again in 4 days 3 hours", a form Codex may use).
     After(u64),
 }
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/// The reset time in a usage-limit message: "… · resets 3pm (America/Los_Angeles)",
-/// "… · resets Oct 3, 3pm (…)", "Your limit will reset at 3pm (…).", or "…|1759258800".
-/// Codex's wording hasn't been seen yet (#50), so its likely forms are read too:
-/// "Try again at 3:45 PM.", "Try again at Sep 9th, 2026 3:45 PM.", "try again in 4 days 3 hours".
 pub fn parse_reset(text: &str) -> Option<Reset> {
     if let Some((_, secs)) = text.rsplit_once('|')
         && let Ok(secs) = secs.trim().parse::<i64>()
@@ -131,12 +105,10 @@ pub fn parse_reset(text: &str) -> Option<Reset> {
     if let Some(i) = lower.find("try again in ") {
         return parse_span(&lower[i + "try again in ".len()..]).map(Reset::After);
     }
-    // ASCII lowercasing keeps byte offsets, so an index into `lower` is one into `text`.
     let start = ["resets at ", "resets ", "reset at ", "try again at "].iter().find_map(|w| lower.find(w).map(|i| i + w.len()))?;
     let rest = &text[start..];
     let end = [" (", " ·", ". "].iter().filter_map(|w| rest.find(w)).min().unwrap_or(rest.len());
     let when = rest[..end].trim().trim_end_matches('.');
-    // The clock is the last word, or the last two ("3:45 PM"); a date may come before it.
     let words: Vec<&str> = when.split_whitespace().collect();
     let two = words.len() >= 2 && matches!(words[words.len() - 1].to_lowercase().as_str(), "am" | "pm");
     let (date_words, clock) = if two { (&words[..words.len() - 2], words[words.len() - 2..].join("")) } else { (&words[..words.len().saturating_sub(1)], words.last()?.to_string()) };
@@ -147,7 +119,6 @@ pub fn parse_reset(text: &str) -> Option<Reset> {
     Some(Reset::At { date, hour, minute })
 }
 
-/// "Oct 3", "Oct 3, 2027" or "Sep 9th, 2026" (the year comes before the clock).
 fn parse_date(text: &str) -> Option<(u32, u32, Option<i32>)> {
     let (month_day, year) = match text.split_once(", ") {
         Some((md, y)) => (md, Some(y.trim().parse().ok()?)),
@@ -159,7 +130,6 @@ fn parse_date(text: &str) -> Option<(u32, u32, Option<i32>)> {
     Some((month, day.parse().ok()?, year))
 }
 
-/// "4 days 3 hours 1 minute", "2 hours, 5 minutes", "30 seconds": in seconds.
 fn parse_span(text: &str) -> Option<u64> {
     let mut words = text.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).peekable();
     let mut total = 0u64;
@@ -183,7 +153,6 @@ fn parse_span(text: &str) -> Option<u64> {
     any.then_some(total)
 }
 
-/// "3pm", "3:30pm", "12am", "3 PM".
 fn parse_clock(text: &str) -> Option<(u32, u32)> {
     let lower = text.trim().to_lowercase();
     let (digits, pm) = if let Some(d) = lower.strip_suffix("pm") {
@@ -199,8 +168,6 @@ fn parse_clock(text: &str) -> Option<(u32, u32)> {
     Some((h % 12 + if pm { 12 } else { 0 }, m))
 }
 
-/// The moment a reset comes, from `now` and the local time zone's offset from
-/// UTC in seconds: a clock time without a date is the next one after `now`.
 pub fn resolve(reset: Reset, now: SystemTime, offset: i64) -> Option<SystemTime> {
     let secs = match reset {
         Reset::Unix(secs) => secs,
@@ -219,7 +186,6 @@ pub fn resolve(reset: Reset, now: SystemTime, offset: i64) -> Option<SystemTime>
                     let at = |y: i64| days_from_civil(y, i64::from(month), i64::from(d)) * 86400 + clock;
                     match year {
                         Some(y) => at(i64::from(y)),
-                        // Past already this year: next year's (a reset in early January, seen in December).
                         None if at(this_year) + 86400 < now_local => at(this_year + 1),
                         None => at(this_year),
                     }
@@ -231,8 +197,6 @@ pub fn resolve(reset: Reset, now: SystemTime, offset: i64) -> Option<SystemTime>
     Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
 }
 
-/// How long until a reset, as the line says it: "1 h 12 min", "12 min", "40 s",
-/// "2 d 4 h". Minutes round up, so it never says "0 min".
 pub fn countdown(left: Duration) -> String {
     let secs = left.as_secs();
     if secs < 60 {
@@ -249,7 +213,6 @@ pub fn countdown(left: Duration) -> String {
     }
 }
 
-/// A moment as the line names it: "at 3:00 PM" today, else "on Oct 3 at 3:00 PM".
 pub fn when_text(at: SystemTime, now: SystemTime, offset: i64) -> String {
     let local = |t: SystemTime| t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64) + offset;
     let (at_local, now_local) = (local(at), local(now));
@@ -264,8 +227,6 @@ pub fn when_text(at: SystemTime, now: SystemTime, offset: i64) -> String {
     format!("on {} {d} at {clock}", MONTHS[(month - 1) as usize])
 }
 
-/// The usage-limit line above the composer. `until`: when it resets, if the
-/// message said; `waiting`: a message waits to go then.
 pub fn usage_line(until: Option<SystemTime>, now: SystemTime, offset: i64, waiting: bool, agent: Agent) -> String {
     let name = agent.name();
     let then = if waiting { "your message sends then".to_owned() } else { format!("{name} can answer again then") };
@@ -278,7 +239,6 @@ pub fn usage_line(until: Option<SystemTime>, now: SystemTime, offset: i64, waiti
     }
 }
 
-/// The local time zone's offset from UTC now, in seconds.
 #[cfg(unix)]
 pub fn local_offset() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
@@ -301,7 +261,6 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-/// (year, month, day) of a day count since 1970-01-01.
 fn civil(z: i64) -> (i64, i64, i64) {
     let z = z + 719468;
     let era = z.div_euclid(146097);
@@ -320,7 +279,6 @@ mod tests {
 
     const PACIFIC: i64 = -7 * 3600;
 
-    /// A moment given as Pacific (UTC−7) wall-clock time.
     fn pacific(y: i64, mo: i64, d: i64, h: i64, mi: i64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs((days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 - PACIFIC) as u64)
     }
@@ -359,14 +317,12 @@ mod tests {
         assert_eq!(classify(None, "Claude AI usage limit reached|1759258800"), Trouble::UsageLimit(Some(Reset::Unix(1759258800))));
         assert_eq!(parse_reset("You've hit your session limit · resets 12am (Europe/London)"), Some(Reset::At { date: None, hour: 0, minute: 0 }));
         assert_eq!(parse_reset("You've hit your Opus limit · resets Jan 2, 2027, 9am (Asia/Tokyo)"), Some(Reset::At { date: Some((1, 2, Some(2027))), hour: 9, minute: 0 }));
-        // No time to read: it still waits.
         assert_eq!(classify(None, "You're out of usage credits. Run /usage-credits to keep using Opus"), Trouble::UsageLimit(None));
         assert_eq!(classify(None, "You've hit your org's monthly spend limit · ask your admin"), Trouble::UsageLimit(None));
     }
 
     #[test]
     fn codex_limit_wordings_are_read_too() {
-        // Codex's real message hasn't been seen (#50): these are the forms it is likely to use.
         let at = |h, m| Some(Reset::At { date: None, hour: h, minute: m });
         assert_eq!(classify(None, "You've hit your usage limit. Upgrade to Pro or try again at 3:45 PM."), Trouble::UsageLimit(at(15, 45)));
         assert_eq!(
@@ -379,7 +335,6 @@ mod tests {
         assert_eq!(parse_reset("You've hit your usage limit. Try again later."), None);
         let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
         assert_eq!(resolve(Reset::After(90), now, 0), Some(now + Duration::from_secs(90)));
-        // Claude Code's forms read as before.
         assert_eq!(parse_reset("You've hit your session limit · resets 3pm (America/Los_Angeles)"), at(15, 0));
         assert_eq!(parse_reset("Your limit will reset at 3pm (America/Los_Angeles)."), at(15, 0));
     }
@@ -389,10 +344,8 @@ mod tests {
         let now = pacific(2026, 9, 30, 13, 48);
         let at3 = Reset::At { date: None, hour: 15, minute: 0 };
         assert_eq!(resolve(at3, now, PACIFIC), Some(pacific(2026, 9, 30, 15, 0)));
-        // 9am has gone today: tomorrow's.
         assert_eq!(resolve(Reset::At { date: None, hour: 9, minute: 0 }, now, PACIFIC), Some(pacific(2026, 10, 1, 9, 0)));
         assert_eq!(resolve(Reset::At { date: Some((10, 3, None)), hour: 15, minute: 30 }, now, PACIFIC), Some(pacific(2026, 10, 3, 15, 30)));
-        // Early January, seen in December: next year's.
         let december = pacific(2026, 12, 30, 10, 0);
         assert_eq!(resolve(Reset::At { date: Some((1, 2, None)), hour: 9, minute: 0 }, december, PACIFIC), Some(pacific(2027, 1, 2, 9, 0)));
         assert_eq!(resolve(Reset::Unix(1759258800), now, PACIFIC), Some(UNIX_EPOCH + Duration::from_secs(1759258800)));
