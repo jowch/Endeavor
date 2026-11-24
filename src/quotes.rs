@@ -10,6 +10,7 @@ use crate::composer::{icon_glyph, label_chip};
 use crate::new_session::{Glyph, glyph};
 use crate::session::Entry;
 use crate::{ReplyToSelection, Workspace, theme};
+use crate::theme::TabStop as _;
 
 #[derive(Clone)]
 pub struct Selected {
@@ -54,6 +55,7 @@ fn menu_row(id: &'static str, label: &'static str, key: &'static str, icon: Glyp
         .px(px(8.))
         .rounded(px(6.))
         .cursor_pointer()
+        .tab_stop_inside()
         .hover(|s| s.bg(theme::menu_hover()))
         .child(glyph(icon, theme::icon_grey()))
         .child(div().text_color(theme::text_primary()).child(label))
@@ -172,6 +174,7 @@ impl Workspace {
                 frame()
                     .id("reply-pill")
                     .role(Role::Button)
+                    .tab_stop_on(theme::popover_bg())
                     .aria_label("Reply")
                     .h(theme::chat_px(30.))
                     .p(px(3.))
@@ -230,6 +233,7 @@ impl Workspace {
                     .justify_center()
                     .rounded_full()
                     .cursor_pointer()
+                    .tab_stop_on(theme::popover_bg())
                     .bg(if empty { theme::bg_raised() } else { theme::accent() })
                     .child(glyph(Glyph::ArrowUp, if empty { theme::text_faint() } else { gpui::white().into() }))
                     .on_click(cx.listener(|this, _, window, cx| this.finish_reply(false, window, cx)));
@@ -245,6 +249,7 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(5.))
                     .cursor_pointer()
+                    .tab_stop_on(theme::popover_bg())
                     .when(menu.is_some(), |d| d.bg(theme::control_edge()))
                     .hover(|s| s.bg(theme::control_edge()))
                     .child(glyph(Glyph::Chevron, theme::text_muted()))
@@ -374,6 +379,7 @@ fn icon_button(id: ElementId, label: &'static str, icon: impl IntoElement) -> St
         .justify_center()
         .rounded(px(4.))
         .cursor_pointer()
+        .tab_stop_on(theme::composer_bg())
         .text_color(theme::text_muted())
         .hover(|s| s.bg(theme::bg_raised()).text_color(theme::text_primary()))
         .child(icon)
@@ -412,6 +418,7 @@ impl Workspace {
                     .id("clear-quotes")
                     .role(Role::Button)
                     .cursor_pointer()
+                    .tab_stop_on(theme::composer_bg())
                     .text_size(theme::chat_meta_small())
                     .hover(|s| s.text_color(theme::text_primary()))
                     .child("Clear")
@@ -505,6 +512,7 @@ impl Workspace {
                             )
                             .role(Role::Button)
                             .aria_label(format!("{label}, show in notebook"))
+                            .tab_stop_on(theme::bg_page())
                             .cursor_pointer()
                             .hover(|s| s.bg(theme::bg_raised()))
                             .on_click(cx.listener(move |this, _, _, cx| this.reveal_cells(cells.clone(), cx))),

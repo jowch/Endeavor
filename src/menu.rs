@@ -11,6 +11,7 @@ use crate::settings::NotebookTheme;
 use wire::backend::Backend;
 use crate::sidebar::{Row, RowAction};
 use crate::theme;
+use crate::theme::TabStop as _;
 use crate::{Interrupt, Workspace};
 
 #[derive(Clone, PartialEq)]
@@ -270,7 +271,7 @@ impl Workspace {
     }
 
     fn folder_rules_body(&self, key: u64, menu: &PopupMenu, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let heading = div().px(px(8.)).pt(px(4.)).pb(px(6.)).text_size(theme::size_meta()).font_weight(FontWeight::MEDIUM).child("Allowed in this folder");
+        let heading = div().px(px(8.)).pt(px(4.)).pb(px(6.)).text_size(theme::size_meta()).font_weight(FontWeight::MEDIUM).child(theme::words("allowed-in-this-folder", "Allowed in this folder"));
         let rows: Vec<AnyElement> = menu
             .rules
             .iter()
@@ -297,6 +298,7 @@ impl Workspace {
                             .aria_label(format!("Remove {words}"))
                             .flex_none()
                             .cursor_pointer()
+                            .tab_stop_on(theme::popover_bg())
                             .text_color(theme::text_faint())
                             .hover(|s| s.text_color(theme::danger()))
                             .child("Remove")
@@ -309,7 +311,7 @@ impl Workspace {
             })
             .collect();
         let empty = rows.is_empty().then(|| {
-            div().px(px(8.)).pb(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child("Nothing yet. Choosing “In this folder” on a prompt adds a rule here.").into_any_element()
+            div().px(px(8.)).pb(px(6.)).text_size(theme::size_meta_small()).text_color(theme::text_faint()).child(theme::words("nothing-yet-choosing-in-this", "Nothing yet. Choosing “In this folder” on a prompt adds a rule here.")).into_any_element()
         });
         [heading.into_any_element()].into_iter().chain(rows).chain(empty).collect()
     }
@@ -359,6 +361,7 @@ impl Workspace {
                 .py(px(4.))
                 .rounded(px(5.))
                 .cursor_pointer()
+                .tab_stop_inside()
                 .when(danger, |d| d.text_color(theme::danger()))
                 .when(menu.selected == Some(i), |d| d.bg(theme::menu_hover()))
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {

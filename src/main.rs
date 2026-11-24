@@ -119,6 +119,8 @@ use settings::Settings;
 use splash::{Progress, Setup};
 use wire::backend::Backend;
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
+use crate::theme::TabStop as _;
 
 fn viewed_notebook_id(url: &str) -> Option<&str> {
     viewed_notebook(url).map(|(_, id)| id)
@@ -277,6 +279,7 @@ fn sidebar_toggle(this: &Workspace, cx: &mut Context<Workspace>) -> impl IntoEle
         .border_color(gpui::transparent_black())
         .track_focus(&this.dialog_focus("sidebar-toggle", cx))
         .tab_stop(true)
+        .keeps_keyboard_on_click()
         .focus_ring_on(if this.settings.layout.sidebar_open { theme::bg_sidebar() } else { theme::bg_page() })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(&ToggleSidebar, window, cx)))
@@ -2298,6 +2301,7 @@ impl Workspace {
             .gap(px(3.))
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_on(theme::bg_sidebar())
             .when(menu.is_some(), |d| d.bg(theme::row_active()))
             .hover(|s| s.bg(theme::row_active()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2334,6 +2338,7 @@ impl Workspace {
             .justify_center()
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_on(theme::bg_page())
             .text_size(theme::size_subhead())
             .text_color(if menu.is_some() { theme::text_primary() } else { theme::text_muted() })
             .when(menu.is_some(), |d| d.bg(theme::row_active()))
