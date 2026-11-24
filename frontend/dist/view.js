@@ -185,7 +185,14 @@
     if (defined.length) return defined.slice(0, 2).join(", ") + (defined.length > 2 ? ", \u2026" : "");
     return cellName(nb.cell_inputs[id]?.code ?? "");
   }
-  var failedCells = (nb) => nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => cellName2(nb, id));
+  var MAX_LINE = 60;
+  function lineUsing(code, pkg) {
+    const word = new RegExp(`(^|[^\\w.])${pkg.replace(/[.]/g, "\\.")}([^\\w.]|$)`);
+    const line = code.split("\n").map((l) => l.trim()).find((l) => word.test(l));
+    if (!line) return null;
+    return line.length > MAX_LINE ? `${line.slice(0, MAX_LINE - 1)}\u2026` : line;
+  }
+  var failedCells = (nb, pkg) => nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => lineUsing(nb.cell_inputs[id]?.code ?? "", pkg) ?? cellName2(nb, id));
   function restartOf(nb) {
     return nb.nbpkg?.restart_required_msg ? "required" : nb.nbpkg?.restart_recommended_msg ? "recommended" : null;
   }
@@ -234,7 +241,7 @@
     const failure = failedPkg ? {
       name: failedPkg.name,
       why: failedPkg.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled.",
-      cells: failedCells(nb),
+      cells: failedCells(nb, failedPkg.name),
       log: plain(nbpkg.terminal_outputs?.[failedPkg.name]) || fullLog
     } : null;
     const readyPkgs = packages.filter((p) => p.state === "ready").length;
@@ -270,7 +277,17 @@
     if (row.status === "failed") return { name: row.name, state: "failed", detail: "" };
     return { name: row.name, state: "waiting", detail: "" };
   }
-  var withoutRWarnings = (message) => plain(message).replace(/\s*In addition: Warning messages?:[\s\S]*$/, "").trim();
+  function withoutRWarnings(message) {
+    const text = plain(message);
+    const warning = text.search(/\s*In addition: Warning messages?:/);
+    if (warning < 0) return text.trim();
+    let depth = 0;
+    for (let i = warning; i < text.length; i++) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")" && depth-- === 0) return (text.slice(0, warning) + text.slice(i)).trim();
+    }
+    return text.slice(0, warning).trim();
+  }
   function installerReason(message) {
     const lines = withoutRWarnings(message).split("\n").map((l) => l.trim()).filter(Boolean);
     const first = (lines[0] ?? "").replace(/^install failed[:,]?\s*/, "");
@@ -292,9 +309,9 @@
     const log = plain(library.log);
     const failedRow = direct.find((r2) => r2.status === "failed" || r2.status === "not_found" || emberCouldntLook.has(r2.status));
     const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : void 0);
-    const failure = failedName ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb), log } : null;
+    const failure = failedName ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb, failedName), log } : null;
     const progress = library.progress;
-    const install = library.status !== "installing" ? null : progress?.total ? { done: progress.done ?? 0, total: progress.total } : { done: rows.filter((r2) => r2.status === "installed").length, total: rows.length };
+    const install = library.status !== "installing" ? null : progress?.total ? { done: progress.done ?? 0, total: progress.total } : { done: 0, total: 0 };
     const waiting2 = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
     let busy = null;
     if (nb.process_status === "starting") busy = "Starting R";

@@ -27,6 +27,9 @@ const css = `
   #endeavor-drawer .headline.failed { color: var(--e-diff-del); }
   #endeavor-drawer .progress { height: 3px; border-radius: 2px; background: var(--e-bg-raised); margin: 0 0 8px; overflow: hidden; }
   #endeavor-drawer .progress > i { display: block; height: 100%; background: var(--e-accent); }
+  #endeavor-drawer .progress.unknown > i { width: 30%; animation: endeavor-sweep 1.4s ease-in-out infinite; }
+  @keyframes endeavor-sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) { #endeavor-drawer .progress.unknown > i { animation: none; width: 100%; opacity: 0.4; } }
   #endeavor-drawer .host { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 4px; }
   #endeavor-drawer .summary { color: var(--e-text-dim); font-size: 11.5px; margin-bottom: 8px; }
   #endeavor-drawer .row { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 4px; min-height: 22px; }
@@ -126,7 +129,9 @@ const markFor = (state: string) =>
 function packagesHtml(m: StatusModel): string {
   const failed = !!m.failure;
   const headline = `<div class="headline${failed ? " failed" : ""}">${escape(m.headline)}</div>`;
-  const progress = m.install && m.install.total ? `<div class="progress"><i style="width:${Math.round((100 * m.install.done) / m.install.total)}%"></i></div>` : "";
+  const progress = !m.install ? ""
+    : m.install.total ? `<div class="progress"><i style="width:${Math.round((100 * m.install.done) / m.install.total)}%"></i></div>`
+    : `<div class="progress unknown"><i></i></div>`;
   const host = `<div class="host">${m.runtime ? `${escape(m.runtime)} · ` : ""}${escape(hostName)}</div>`;
   const allReady = !m.install && !failed && m.packages.length > 0 && m.packages.every((p) => p.state === "ready") && !m.deps?.failed;
   const counted = `${m.packages.length} package${m.packages.length === 1 ? "" : "s"}${m.deps ? ` and ${m.deps.count} dependenc${m.deps.count === 1 ? "y" : "ies"}` : ""}`;

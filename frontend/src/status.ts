@@ -143,7 +143,17 @@ function cellName(nb: NotebookLike, id: string): string {
   return cellLabel(nb.cell_inputs[id]?.code ?? "");
 }
 
-const failedCells = (nb: NotebookLike) => nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => cellName(nb, id));
+const MAX_LINE = 60;
+
+function lineUsing(code: string, pkg: string): string | null {
+  const word = new RegExp(`(^|[^\\w.])${pkg.replace(/[.]/g, "\\.")}([^\\w.]|$)`);
+  const line = code.split("\n").map((l) => l.trim()).find((l) => word.test(l));
+  if (!line) return null;
+  return line.length > MAX_LINE ? `${line.slice(0, MAX_LINE - 1)}…` : line;
+}
+
+const failedCells = (nb: NotebookLike, pkg: string) =>
+  nb.cell_order.filter((id) => nb.cell_results[id]?.errored).map((id) => lineUsing(nb.cell_inputs[id]?.code ?? "", pkg) ?? cellName(nb, id));
 
 function restartOf(nb: NotebookLike): StatusModel["restart"] {
   return nb.nbpkg?.restart_required_msg ? "required" : nb.nbpkg?.restart_recommended_msg ? "recommended" : null;
@@ -202,7 +212,7 @@ function plutoModel(nb: NotebookLike): StatusModel {
     ? {
         name: failedPkg.name,
         why: failedPkg.detail === "not found" ? "isn't a package Pkg can find: a typo, or not in the registry." : "couldn't be installed or precompiled.",
-        cells: failedCells(nb),
+        cells: failedCells(nb, failedPkg.name),
         log: plain(nbpkg.terminal_outputs?.[failedPkg.name]) || fullLog,
       }
     : null;
@@ -244,8 +254,17 @@ function emberRow(row: EmberPackageRow): PkgRow {
   return { name: row.name, state: "waiting", detail: "" };
 }
 
-export const withoutRWarnings = (message: string | null | undefined): string =>
-  plain(message).replace(/\s*In addition: Warning messages?:[\s\S]*$/, "").trim();
+export function withoutRWarnings(message: string | null | undefined): string {
+  const text = plain(message);
+  const warning = text.search(/\s*In addition: Warning messages?:/);
+  if (warning < 0) return text.trim();
+  let depth = 0;
+  for (let i = warning; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")" && depth-- === 0) return (text.slice(0, warning) + text.slice(i)).trim();
+  }
+  return text.slice(0, warning).trim();
+}
 
 export function installerReason(message: string | null | undefined): string {
   const lines = withoutRWarnings(message).split("\n").map((l) => l.trim()).filter(Boolean);
@@ -274,14 +293,14 @@ function emberModel(nb: NotebookLike, pkgs: EmberPackages): StatusModel {
   const failedRow = direct.find((r) => r.status === "failed" || r.status === "not_found" || emberCouldntLook.has(r.status));
   const failedName = failedRow?.name ?? (library.status === "failed" ? library.failures?.[0]?.package : undefined);
   const failure: Failure | null = failedName
-    ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb), log }
+    ? { name: failedName, why: emberWhy(failedRow, library.message), cells: failedCells(nb, failedName), log }
     : null;
 
   const progress = library.progress;
   const install =
     library.status !== "installing" ? null
     : progress?.total ? { done: progress.done ?? 0, total: progress.total }
-    : { done: rows.filter((r) => r.status === "installed").length, total: rows.length };
+    : { done: 0, total: 0 };
   const waiting = nb.cell_order.filter((id) => nb.cell_results[id]?.running || nb.cell_results[id]?.queued).length;
   let busy: string | null = null;
   if (nb.process_status === "starting") busy = "Starting R";

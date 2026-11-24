@@ -117,7 +117,7 @@ test("a package Pkg can't find fails, though Pluto's package step finished", () 
   ]);
   assert.equal(m.headline, "Package failed · NotARealPkgQ");
   assert.equal(m.failure.why, "isn't a package Pkg can find: a typo, or not in the registry.");
-  assert.deepEqual(m.failure.cells, ["using Colors, Statistics, N…"]);
+  assert.deepEqual(m.failure.cells, ["using Colors, Statistics, NotARealPkgQ"]);
 });
 
 test("safe preview, a failed save, a required restart", () => {
@@ -218,17 +218,27 @@ test("Bioconductor couldn't be looked in: the row's own message, not \"a typo\""
   assert.deepEqual(m.packages.at(-1), { name: "limma", state: "failed", detail: "couldn't look up" });
 });
 
-test("an R warning printed after Ember's lookup message stays out of the reason", () => {
-  const message = "limma isn't on CRAN at this date, and Ember couldn't look in Bioconductor (no index for that date (404)) In addition: Warning message:\npackage 'ember' was built under R version 4.6.2";
-  const rows = [...rRows("installed"), { name: "limma", direct: true, status: "lookup_failed", message }];
+test("an R warning Ember's lookup message carries stays out of the reason, and its brackets stay closed", () => {
+  const message = "notARealPkgZ isn't on CRAN at this date, and Ember couldn't look in Bioconductor (the package index bioc/2026-11-24/3.23 could not be fetched: no index for that date (404) In addition: Warning message: package 'ember' was built under R version 4.6.2); running again tries again";
+  const rows = [...rRows("installed"), { name: "notARealPkgZ", direct: true, status: "lookup_failed", message }];
   const m = status.statusModel(ember({ status: "ready" }, rows));
-  assert.equal(m.failure.why, "couldn't be looked up: limma isn't on CRAN at this date, and Ember couldn't look in Bioconductor (no index for that date (404))");
+  assert.equal(m.failure.why, "couldn't be looked up: notARealPkgZ isn't on CRAN at this date, and Ember couldn't look in Bioconductor (the package index bioc/2026-11-24/3.23 could not be fetched: no index for that date (404)); running again tries again");
+  assert.equal(status.withoutRWarnings("install failed:\nERROR: x\nIn addition: Warning messages:\n1: a\n2: b"), "install failed:\nERROR: x");
 });
 
-test("an R install Ember gives no progress for counts the notebook's packages that are in place, so the bar fills", () => {
+test("the cells a failed package blocks are named by the line that uses it", () => {
+  const rows = [...rRows("installed"), { name: "notARealPkgZ", direct: true, status: "lookup_failed", message: "m" }];
+  const m = status.statusModel(ember({ status: "ready" }, rows, {
+    cell_inputs: { a: { code: "library(tidyr)\nlibrary(lubridate)\nlibrary(notARealPkgZ)" }, b: { code: "x <- 1" } },
+    cell_results: { a: { errored: true }, b: { errored: true } },
+  }));
+  assert.deepEqual(m.failure.cells, ["library(notARealPkgZ)", "x <- 1"]);
+});
+
+test("an R install Ember gives no progress for shows no count, so the drawer's bar runs without a stuck 0 of N", () => {
   const m = status.statusModel(ember({ status: "installing" }, rRows()));
-  assert.deepEqual(m.install, { done: 2, total: 4 });
-  assert.equal(m.busy, "Installing packages · 2 of 4");
+  assert.deepEqual(m.install, { done: 0, total: 0 });
+  assert.equal(m.busy, "Installing packages");
 });
 
 test("run times read like Pluto's", () => {

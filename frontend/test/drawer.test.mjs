@@ -82,6 +82,8 @@ test("each new install opens Packages again, but one the user closed stays close
     await p.settle();
   };
   assert.equal(drawer(), "packages");
+  assert.ok(p.window.document.querySelector("#endeavor-drawer .progress.unknown"), "with no count from Ember, the bar runs instead of sitting at 0");
+  assert.match(p.text(), /^Installing packages(?! ·)/);
   p.window.__endeavor.receive({ type: "drawer", tab: null });
   await install("installing", "installing");
   assert.equal(drawer(), undefined, "closed by the user during this install");
