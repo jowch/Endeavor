@@ -3071,12 +3071,13 @@ footer form#feedback { display: none !important; }
   // src/marimodocs.ts
   var DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
   var PANEL = "[data-testid=helper]";
+  var ICON_COLUMN = "[data-testid=chrome-sidebar]";
   var TRIES = 4;
   var SETTLE_MS = 1200;
   var POLL_MS = 50;
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
-    position: fixed !important; left: 0; right: 0; bottom: 0; top: auto; width: auto !important;
+    position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
     height: 42vh; flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
@@ -3099,10 +3100,19 @@ footer form#feedback { display: none !important; }
     return shown2() === want;
   }
   var reported = null;
+  function besideIconColumn() {
+    const column = document.querySelector(ICON_COLUMN)?.getBoundingClientRect();
+    if (!column) return { left: 0, bottom: 0 };
+    return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
+  }
   function follow2() {
     const open3 = docsShown();
-    if (open3) document.documentElement.dataset.endeavorDrawer = "docs";
-    else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
+    if (open3) {
+      document.documentElement.dataset.endeavorDrawer = "docs";
+      const { left, bottom } = besideIconColumn();
+      document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
+      document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+    } else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
     if (open3 === reported) return;
     reported = open3;
     send({ type: "docs", open: open3 });

@@ -2,13 +2,14 @@ import { on, send } from "./bridge";
 
 const DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
 const PANEL = "[data-testid=helper]";
+const ICON_COLUMN = "[data-testid=chrome-sidebar]";
 const TRIES = 4;
 const SETTLE_MS = 1200;
 const POLL_MS = 50;
 
 const css = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
-    position: fixed !important; left: 0; right: 0; bottom: 0; top: auto; width: auto !important;
+    position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
     height: 42vh; flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
@@ -36,9 +37,20 @@ export async function setDocs(want: boolean, shown: () => boolean, press: () => 
 
 let reported: boolean | null = null;
 
+export function besideIconColumn(): { left: number; bottom: number } {
+  const column = document.querySelector(ICON_COLUMN)?.getBoundingClientRect();
+  if (!column) return { left: 0, bottom: 0 };
+  return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
+}
+
 function follow() {
   const open = docsShown();
-  if (open) document.documentElement.dataset.endeavorDrawer = "docs";
+  if (open) {
+    document.documentElement.dataset.endeavorDrawer = "docs";
+    const { left, bottom } = besideIconColumn();
+    document.documentElement.style.setProperty("--endeavor-docs-left", `${left}px`);
+    document.documentElement.style.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+  }
   else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
   if (open === reported) return;
   reported = open;

@@ -47,3 +47,8 @@ test("a dropped press is pressed again, and a slow one is waited for rather than
   assert.equal(await setDocs(true, () => false, () => presses++, wait), false, "gives up after a few tries");
   assert.equal(presses, 4);
 });
+
+test("the drawer starts beside marimo's icon column and ends above its footer", async () => {
+  const { besideIconColumn } = await load();
+  assert.equal(JSON.stringify(besideIconColumn()), JSON.stringify({ left: 0, bottom: 0 }), "no column, the whole width");
+});
