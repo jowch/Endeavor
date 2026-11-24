@@ -280,8 +280,20 @@ doesn't show the change; that command reads the plugin list itself. A
 user's own `CODEX_CONFIG` stays, with Endeavor's key merged in. Endeavor
 added by hand as `[mcp_servers.endeavor]` is not turned off: a partial
 `mcp_servers.endeavor` table makes Codex refuse to start a thread for a user
-without that server ("invalid transport"), checked the same way. Claude's
-sessions turn that server off with a `mcp__endeavor` rule.
+without that server ("invalid transport"), checked the same way. And the
+adapter (`codex-acp`) replaces `CODEX_CONFIG`'s whole `mcp_servers` table with
+the servers the client sends in each session, so a key there wouldn't reach
+the thread anyway (#251, still open for Codex). Claude's sessions turn that
+server off with `deniedMcpServers` in the flag settings and a `mcp__endeavor`
+rule.
+
+The adapter also drops a server the client sends when the user's config
+already has one of that name (`shouldDeduplicateMcpConflicts`), so a user's
+own `[mcp_servers.notebook]` would take the place of the app's. Turning that
+off (`DISABLE_MCP_CONFIG_FILTERING=true`) isn't a fix: Codex merges a session's
+`mcp_servers.notebook` into the user's table key by key, so the user's stdio
+`command` and the app's `url` meet in one table, which Codex refuses ("url is
+not supported for stdio", checked 2026-11-23 with `codex -c` 0.159.3).
 
 ### 7. Modes, models and effort
 
