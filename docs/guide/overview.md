@@ -9,8 +9,8 @@ Endeavor is an app for doing your own data analysis with an AI assistant,
 such as Claude, made by Anthropic. You describe what you want in a chat. The
 assistant writes the code and runs it in a Julia or R notebook next to the
 chat, and you watch each step, change what you like, and decide what runs.
-It is made for macOS, and runs on Windows and Linux too. On a Mac or Linux
-computer it also runs Python notebooks, on marimo.
+It is made for macOS, and runs on Windows and Linux too. On this computer it
+also runs Python notebooks, on marimo.
 
 ![The Endeavor window: the list of sessions on the left, the chat in the middle, and the notebook on the right](images/main-window.png)
 
@@ -87,6 +87,7 @@ The first time you open a Python notebook, uv gets Python and the packages the
 notebook names. With no uv on your computer, the pane offers **Install uv**,
 and only when you click it does Endeavor download its own uv 0.11.32 from
 uv's GitHub release, checked against its SHA-256, into `~/.cache/endeavor/`.
+On Windows, Endeavor has no uv of its own, so install uv yourself first.
 
 On Windows, Julia comes from juliaup, Julia's own installer, which
 Endeavor installs during setup if you don't have it; juliaup checks the Julia

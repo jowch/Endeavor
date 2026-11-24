@@ -34,9 +34,9 @@ it is announced is tracked in [#156](https://github.com/jowch/Endeavor/issues/15
   analysis with no help.
 - **Python notebooks through marimo** ([#1](https://github.com/jowch/Endeavor/issues/1),
   [marimo.md](marimo.md)). Python notebooks open, are made and run in the app on
-  this computer (Mac and Linux), with Point, and Install uv where there's no uv.
-  Left: servers and clusters, Windows, and Endeavor's other page tools on
-  marimo's page.
+  this computer, with Point. Install uv is offered where there's no uv on a Mac
+  or Linux computer; on Windows the user installs uv. Left: servers and
+  clusters, and Endeavor's other page tools on marimo's page.
 - **R notebooks on Windows.** R notebooks (Ember) run in the app on Macs and
   Linux, and on servers and clusters. On Windows the chip offers only Julia
   and lists no `.R` files, until Ember runs there (Ember #48, #49).
