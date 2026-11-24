@@ -1,17 +1,3 @@
-//! Julia stopping by itself under a notebook (board XStopped): the pane says
-//! so, with Restart Julia, which reopens the notebook and runs it again. If
-//! Julia stops again during that run, the notebook opens in safe preview
-//! instead, so a cell that takes Julia down can't do it in a loop.
-//!
-//! R ending under an R notebook works the same way: the runtime closes every R
-//! notebook with it and says why (`engine_ended`), and Start R again opens the
-//! notebook again, running it only if it was allowed to run before.
-//!
-//! A notebook's own Julia (Pluto runs each notebook in a process of its own)
-//! is seen to stop in the runtime's notebook list (`exited`, with the cells
-//! that were running) and through its page; all of a host's Julia stopping
-//! is heard from its helper, for each notebook that was running there.
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -26,47 +12,31 @@ use crate::new_session::Glyph;
 use crate::pluto;
 use crate::signin::Look;
 
-/// A notebook's file, on its host.
 pub type At = (HostId, String);
 
-/// A rerun that hasn't been seen running by then is taken as done.
 const RERUN_GRACE: Duration = Duration::from_secs(120);
 
-/// A stop heard this soon after a restart is the restart's own.
 const RESTART_SETTLE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Crash {
-    /// The pane says so. `cell`: what was running then, when known.
     Stopped { cell: Option<String>, since: Instant },
-    /// Restart Julia reopened it, and it runs its cells again.
     Rerunning { cell: Option<String>, since: Instant, ran: bool },
-    /// It stopped again during that run: open in safe preview, with the
-    /// callout naming the cell that was running each time.
     Again { first: Option<String>, then: Option<String> },
 }
 
-/// What a stop turned out to be.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Heard {
     First,
-    /// During the run after a restart.
     Again,
-    /// Already said.
     Known,
 }
 
 #[derive(Debug, Default)]
 pub struct Crashes {
     crashes: HashMap<At, Crash>,
-    /// The cell each notebook ran as last seen while its Julia was alive, so
-    /// a stop can name it.
     running: HashMap<At, Option<String>>,
-    /// Why the engine under a notebook ended, when the runtime said (R's): its language, and how its process
-    /// ended with its last output.
     why: HashMap<At, (String, String)>,
-    /// Whether each notebook was allowed to run when last listed: an R notebook the runtime closed when R
-    /// ended opens again the same way, so one in safe preview doesn't run without the user.
     allowed: HashMap<At, bool>,
 }
 
@@ -75,7 +45,6 @@ impl Crashes {
         self.crashes.get(at)
     }
 
-    /// The pane's crash page shows for it.
     pub fn stopped_at(&self, at: &At) -> Option<Option<&str>> {
         match self.crashes.get(at) {
             Some(Crash::Stopped { cell, .. }) => Some(cell.as_deref()),
@@ -83,14 +52,10 @@ impl Crashes {
         }
     }
 
-    /// The cell the notebook ran when last seen alive.
     pub fn was_running(&self, at: &At) -> Option<String> {
         self.running.get(at).cloned().flatten()
     }
 
-    /// Julia stopped under the notebook at `at`, while `cell` ran. A stop
-    /// heard twice (the runtime's list and the page) may name the cell only
-    /// the second time.
     pub fn stopped(&mut self, at: At, cell: Option<String>, now: Instant) -> Heard {
         match self.crashes.get_mut(&at) {
             Some(Crash::Stopped { cell: known, .. }) => {
@@ -100,10 +65,7 @@ impl Crashes {
                 Heard::Known
             }
             Some(Crash::Again { .. }) => Heard::Known,
-            // The restart itself takes the old process down.
             Some(Crash::Rerunning { since, .. }) if now.duration_since(*since) < RESTART_SETTLE => Heard::Known,
-            // A rerun never seen running is done after a while, though no list came to say so (an idle R
-            // notebook's list doesn't change): a stop after that is a first one.
             Some(Crash::Rerunning { since, ran: false, .. }) if now.duration_since(*since) > RERUN_GRACE => {
                 self.crashes.insert(at, Crash::Stopped { cell, since: now });
                 Heard::First
@@ -120,22 +82,18 @@ impl Crashes {
         }
     }
 
-    /// The runtime closed the notebook at `at` because its engine, `language`, ended, for `why`.
     pub fn ended(&mut self, at: At, language: String, why: String) {
         self.why.insert(at, (language, why));
     }
 
-    /// Whether the notebook at `at` was allowed to run when last listed; not when it never was.
     pub fn was_allowed(&self, at: &At) -> bool {
         self.allowed.get(at).copied().unwrap_or(false)
     }
 
-    /// Why the engine under the notebook at `at` ended, if the runtime said.
     pub fn why(&self, at: &At) -> Option<&(String, String)> {
         self.why.get(at)
     }
 
-    /// It runs again (Restart Julia, or restarted some other way).
     pub fn restarted(&mut self, at: &At, now: Instant) {
         self.why.remove(at);
         if let Some(Crash::Stopped { cell, .. }) = self.crashes.get(at) {
@@ -144,10 +102,6 @@ impl Crashes {
         }
     }
 
-    /// The runtime's word on a notebook: the cell it runs, if any, and
-    /// whether it may run at all (false while its Julia is gone). A stopped
-    /// notebook that may run again was restarted some other way; a rerun is
-    /// done once it ran and stopped running.
     pub fn progress(&mut self, at: &At, running: bool, cell: Option<String>, allowed: bool, now: Instant) {
         if allowed {
             self.running.insert(at.clone(), cell.filter(|_| running));
@@ -169,19 +123,16 @@ impl Crashes {
         self.why.remove(at);
     }
 
-    /// The notebook opened after a second stop was let run.
     pub fn forget_again(&mut self, at: &At) {
         if matches!(self.crashes.get(at), Some(Crash::Again { .. })) {
             self.crashes.remove(at);
         }
     }
 
-    /// Every notebook of `host` that stopped and hasn't run since.
     pub fn stopped_on(&self, host: &HostId) -> Vec<String> {
         self.crashes.iter().filter(|((h, _), c)| h == host && matches!(c, Crash::Stopped { .. })).map(|((_, path), _)| path.clone()).collect()
     }
 
-    /// The callout's words for a notebook opened in safe preview after a second stop of its `engine` ("Julia", "R").
     pub fn callout(&self, at: &At, engine: &str) -> Option<(String, String)> {
         let Some(Crash::Again { first, then }) = self.crashes.get(at) else { return None };
         let body = match (first, then) {
@@ -194,20 +145,16 @@ impl Crashes {
 }
 
 impl Workspace {
-    /// Session `key`'s notebook file, on its host.
     pub fn notebook_at(&self, key: u64) -> Option<At> {
         let session = self.sessions.iter().find(|s| s.key == key)?;
         Some((session.place.host.clone(), session.notebook_path.clone()?))
     }
 
-    /// The engine a notebook runs on, for what the app says: "R" for an R notebook, else "Julia".
     pub fn engine_at(&self, at: &At) -> &'static str {
         let session = self.sessions.iter().find(|s| s.place.host == at.0 && s.notebook_path.as_deref() == Some(at.1.as_str()));
         if session.is_some_and(|s| s.kind == Backend::Ember) || at.1.ends_with(".R") { "R" } else { "Julia" }
     }
 
-    /// The page says whether its notebook's own Julia is there: gone by itself
-    /// is a stop, back is a restart.
     pub fn page_process(&mut self, key: u64, dead: bool, was_dead: bool, cx: &mut Context<Self>) {
         let Some(at) = self.notebook_at(key) else { return };
         if dead && !was_dead {
@@ -218,9 +165,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The notebook at `at`'s own Julia stopped by itself, while `cell` ran
-    /// if known (else the cell last seen running). A second stop during the
-    /// run after Restart Julia opens it in safe preview in the session that has it.
     pub fn notebook_stopped(&mut self, at: At, cell: Option<String>, cx: &mut Context<Self>) {
         let cell = cell.or_else(|| self.crashes.was_running(&at));
         let engine = self.engine_at(&at);
@@ -238,9 +182,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// All of `host`'s Julia stopped by itself, under the notebooks in `paths`.
-    /// A second stop while they ran after Restart Julia starts it again with
-    /// every notebook in safe preview.
     pub fn julia_died(&mut self, host: &HostId, paths: Vec<String>, cx: &mut Context<Self>) {
         let now = Instant::now();
         let mut again = false;
@@ -258,9 +199,6 @@ impl Workspace {
         }
     }
 
-    /// Restart Julia on the crash page: a notebook's own Julia restarts and
-    /// runs it again; all of a host's starts again, rerunning the notebooks
-    /// that were running. Start R again opens an R notebook again.
     pub fn restart_after_crash(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(at) = self.notebook_at(key) else { return };
         let host = at.0.clone();
@@ -275,9 +213,6 @@ impl Workspace {
             }
             self.start_host(&host, cx);
         } else if self.sessions.iter().any(|s| s.key == key && s.kind == Backend::Ember) {
-            // The runtime closed the notebook when R ended: opening it again starts R again. It runs only if it
-            // was allowed to before; one in safe preview opens in safe preview again.
-            // One that doesn't run has no rerun to watch.
             let run = self.crashes.was_allowed(&at);
             if run {
                 self.crashes.restarted(&at, now);
@@ -292,7 +227,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Close the notebook and open it again without running it.
     fn reopen_in_safe_preview(&mut self, key: u64, path: String, cx: &mut Context<Self>) {
         let Some(bridge) = self.session_bridge(key) else { return };
         let stop = cx.background_executor().spawn({
@@ -308,8 +242,6 @@ impl Workspace {
         .detach();
     }
 
-    /// The runtime's notebook list changed: follow each notebook's running
-    /// cell, and the runs after Restart Julia.
     pub fn crash_progress(&mut self, host: &HostId) {
         let Some(connection) = self.connections.get(host) else { return };
         let now = Instant::now();
@@ -328,9 +260,6 @@ impl Workspace {
         }
     }
 
-    /// The crash page, for session `key`'s notebook: what's kept, the cell
-    /// that was running, why R ended if it did, Restart Julia or Start R again,
-    /// and the runtime's log on This Mac.
     pub fn render_crash_page(&self, key: u64, cx: &mut Context<Self>) -> AnyElement {
         let at = self.notebook_at(key);
         let cell = at.as_ref().and_then(|at| self.crashes.stopped_at(at).flatten().map(str::to_owned).or_else(|| self.crashes.was_running(at)));
@@ -350,34 +279,27 @@ impl Workspace {
     }
 }
 
-/// The crash page's title, for an R notebook's (`r`) or a Julia one's.
 pub fn page_title(r: bool) -> &'static str {
     if r { "R stopped unexpectedly" } else { "Julia stopped unexpectedly" }
 }
 
-/// The crash page's button: R's notebook opens again, which starts R; Julia restarts.
 pub fn restart_label(r: bool) -> &'static str {
     if r { "Start R again" } else { "Restart Julia" }
 }
 
-/// What the runtime said of how the engine ended, e.g. "R ended: signal: 9 (SIGKILL)".
 pub fn why_text(language: &str, why: &str) -> String {
     format!("{language} ended: {why}")
 }
 
-/// This Mac's runtime log (Julia's and R's), in Finder.
 fn reveal_julia_log() {
     crate::platform::reveal(&crate::runtime::state_dir().join("runtime.log"));
 }
 
-/// The crash page's words: what's kept, and the cell that was running.
 pub fn page_text(cell: Option<&str>) -> (String, Option<String>) {
     let kept = "The notebook file is saved; its outputs are gone until the cells run again.".to_owned();
     (kept, cell.map(|c| format!("It was running `{c}` when it stopped. Very large data can run out of memory.")))
 }
 
-/// The cell a notebook runs, by name when the runtime knows it, from the
-/// runtime's notebook entry (`list_notebooks` shape) and its cells (`/events` shape).
 pub fn running_cell(nb: &serde_json::Value, cells: &serde_json::Value) -> Option<String> {
     let id = nb["running"].as_array()?.first()?.as_str()?;
     let notebook = nb["notebook_id"].as_str()?;
@@ -385,9 +307,6 @@ pub fn running_cell(nb: &serde_json::Value, cells: &serde_json::Value) -> Option
     cell["name"].as_str().map(str::to_owned)
 }
 
-/// The notebooks whose own Julia stopped by itself since the list `before`
-/// (`list_notebooks` shape), each with the cell that was running, by name
-/// when the runtime knows it (`cells`, `/events` shape).
 pub fn new_exits(before: &serde_json::Value, now: &serde_json::Value, cells: &serde_json::Value) -> Vec<(String, Option<String>)> {
     let exited = |list: &serde_json::Value, path: &str| list.as_array().into_iter().flatten().any(|nb| nb["path"] == path && nb["exited"].is_object());
     let notebooks = now.as_array().into_iter().flatten().filter(|nb| nb["exited"].is_object());
@@ -404,7 +323,6 @@ pub fn new_exits(before: &serde_json::Value, now: &serde_json::Value, cells: &se
         .collect()
 }
 
-/// The notebooks that were let run (`list_notebooks` shape): the ones a stop of all of Julia stops.
 pub fn running_notebooks(notebooks: &serde_json::Value) -> Vec<String> {
     let allowed = notebooks.as_array().into_iter().flatten().filter(|nb| nb["execution_allowed"] == true);
     allowed.filter_map(|nb| nb["path"].as_str().map(str::to_owned)).collect()
@@ -412,7 +330,6 @@ pub fn running_notebooks(notebooks: &serde_json::Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui's own `#[test]`.
     use super::{At, Crash, Crashes, Heard, new_exits, page_text, page_title, restart_label, running_cell, running_notebooks, why_text};
     use crate::hosts::HostId;
     use std::time::{Duration, Instant};
@@ -457,7 +374,6 @@ mod tests {
         c.forget(&r);
         assert_eq!(c.why(&r), None);
 
-        // Start R again runs it only if it ran before: one in safe preview stays so.
         let preview: At = (HostId::ThisMac, "/lab/preview.R".into());
         assert!(!c.was_allowed(&preview), "never listed");
         c.progress(&preview, false, None, false, t);
@@ -465,7 +381,6 @@ mod tests {
         c.progress(&r, false, None, true, t);
         assert!(c.was_allowed(&r));
 
-        // R ending again during the rerun names R.
         c.stopped(r.clone(), Some("fit".into()), t);
         c.restarted(&r, t);
         c.progress(&r, true, Some("fit".into()), true, t + Duration::from_secs(4));
@@ -516,7 +431,6 @@ mod tests {
         assert_eq!(running_cell(&notebooks[1], &cells), None);
         assert_eq!(running_notebooks(&notebooks), ["/lab/fit_decay.jl"], "a notebook in safe preview wasn't running");
 
-        // The cell is remembered from while Julia ran: the list after a stop can't say.
         let mut c = Crashes::default();
         let t = Instant::now();
         c.progress(&at(), true, Some("rates".into()), true, t);
@@ -534,7 +448,6 @@ mod tests {
         let idle = json!([{ "notebook_id": "n1", "path": "/lab/fit_decay.jl", "running": [], "exited": { "running": [] } }]);
         assert_eq!(new_exits(&running, &idle, &cells), [("/lab/fit_decay.jl".to_owned(), None)], "nothing was running");
 
-        // The page may say so first, without the cell; the runtime's list names it.
         let t = Instant::now();
         let mut c = Crashes::default();
         assert_eq!(c.stopped(at(), None, t), Heard::First);

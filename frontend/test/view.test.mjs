@@ -44,6 +44,7 @@ test("picks become quotes that name what was picked, with no code or output but 
   assert.doesNotMatch(chatMessage(NB, [{ picks: [{ part: "cell", cell: A, code: "a\n\n\n\n\nb" }], comment: "" }]), /were shortened/);
   assert.equal(quoteText(NB, [{ part: "cell", cell: A, code: CODE }, { part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], ""), `<quote cell="rates" uri="${uri}"/>\n\n<quote cell="rates" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A, A] }], ""), `<quote part="box" uri="${uri} ${uri}"/>`);
+  assert.equal(quoteText(NB, [{ part: "output", cell: A, code: 'HTML("""<svg/> & co""")', text: "" }], ""), `<quote cell="HTML(&quot;&quot;&quot;&lt;svg/&gt; &amp; co&quot;&quot;&quot;)" part="output" uri="${uri}"/>`);
   assert.equal(quoteText(NB, [{ part: "box", cells: [A] }], "", "pluto", ["0123456789abcdef"]), `<quote part="box" uri="${uri}" crop="0123456789abcdef"/>`);
   assert.equal(quoteText(NB, [{ part: "output", cell: A, code: CODE, text: "[1] 1 4 9" }], "", "ember"), `<quote cell="rates" part="output" uri="notebook://ember/${NB}/cell/${A}"/>`);
   const long = Array.from({ length: 3000 }, (_, i) => `y${i} = ${i}`).join("\n");
@@ -70,6 +71,19 @@ test("↩'s message keeps to what Claude takes: no long runs of blank lines or s
   const room = 8000 - chatMessage(NB, [{ picks: [pick], comment: "c" }]).length + 1;
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room) }]).length, 8000);
   assert.equal(chatMessage(NB, [{ picks: [pick], comment: "c".repeat(room + 1) }]), null);
+  const many = Array.from({ length: 300 }, (_, i) => `rows${i} = fit(data[${i}, :], model)`);
+  const drag = { part: "lines", cell: A, code: many.join("\n"), lines: [1, 300], text: many.join("\n") };
+  const bare = chatMessage(NB, [{ picks: [drag], comment: "Why so slow?" }]);
+  assert.ok(bare.length <= 8000 && bare.endsWith(`<quote cell="rows0" lines="1-300" uri="notebook://pluto/${NB}/cell/${A}"/>\nWhy so slow?`), bare.slice(-200));
+  assert.match(bare, /go by their line numbers only \(a quote with lines and no body\): read them with read_cell/);
+  assert.doesNotMatch(chatMessage(NB, [{ picks: [{ ...drag, lines: [1, 2], text: many.slice(0, 2).join("\n") }], comment: "" }]), /line numbers only/);
+  assert.equal(chatMessage(NB, [{ picks: [drag], comment: "c".repeat(8000) }]), null);
+  const short = { part: "lines", cell: A, code: CODE, lines: [2, 2], text: "  fit(rows)" };
+  const both = chatMessage(NB, [{ picks: [short, drag], comment: "" }, { picks: [{ ...drag, lines: [1, 299] }], comment: "and this" }]);
+  assert.ok(both.length <= 8000 && both.includes(`lines="2-2" uri="notebook://pluto/${NB}/cell/${A}">\n  fit(rows)\n</quote>`), "the short pick keeps its text");
+  assert.ok(both.includes(`lines="1-300" uri="notebook://pluto/${NB}/cell/${A}"/>`) && both.includes(`lines="1-299" uri="notebook://pluto/${NB}/cell/${A}"/>`));
+  const one = chatMessage(NB, [{ picks: [{ ...drag, lines: [1, 120], text: many.slice(0, 120).join("\n") }, { ...drag, lines: [1, 150], text: many.slice(0, 150).join("\n") }], comment: "" }]);
+  assert.ok(one.includes(`lines="1-150" uri="notebook://pluto/${NB}/cell/${A}"/>`) && one.includes(`lines="1-120" uri="notebook://pluto/${NB}/cell/${A}">\n`), "the longer goes by number first, and that's enough");
 });
 
 test("the view's look leaves Pluto's header and docs panel to the toolbar's rules, and shows a Point button", () => {

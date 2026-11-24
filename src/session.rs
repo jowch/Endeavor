@@ -3515,7 +3515,11 @@ mod tests {
         }
         let [Entry::User { text, attachments, .. }] = s.entries.as_slice() else { panic!("one user entry") };
         assert_eq!(text.as_ref(), "why do these bunch up?");
-        assert_eq!(attachments, &sent);
+        let mut back = sent.clone();
+        if let Attachment::Quote(Quote { from: Quoted::Cell { part: Part::Figure(png), .. }, .. }) = &mut back[3] {
+            *png = Arc::new(Vec::new());
+        }
+        assert_eq!(attachments, &back);
     }
 
     #[test]

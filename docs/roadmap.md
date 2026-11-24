@@ -60,7 +60,7 @@ The notebook tools (runtime, MCP server, `endeavor serve`) live in
   Mac nightly checks `nightly.json` once a day, fetches a newer build,
   checks its Developer ID team and notarization and that its signed
   Info.plist names that build, and installs it on Restart or quit
-  (`src/updater.rs`). The Windows nightly fetches the installer, checks its
+  (`src/updater.rs`, [updates.md](updates.md)). The Windows nightly fetches the installer, checks its
   SHA-256 (it isn't signed, #12, so that's the only check), and runs it
   silently on Restart or quit. A download the app makes carries no Mark of
   the Web, so SmartScreen's file check doesn't stop it (checked on Windows
