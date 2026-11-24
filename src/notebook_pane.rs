@@ -188,6 +188,28 @@ impl NotebookAction {
     }
 }
 
+pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, page: &PageState) -> Option<String> {
+    match kind {
+        Backend::Marimo => page.drawer.clone().filter(|_| shown),
+        _ => reported.and_then(|p| p.drawer.clone()),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum HeaderTool {
+    Share,
+    Docs,
+    Status,
+}
+
+pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
+    match kind {
+        Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
+        Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Status],
+        Backend::Pluto | Backend::Ember => &[],
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ExportFrom {
     Page(String),
@@ -239,6 +261,28 @@ pub enum PaneShows {
 }
 
 pub const OPENING_GRACE: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+pub struct DrawerAsk {
+    loading: bool,
+    pending: Option<String>,
+}
+
+impl DrawerAsk {
+    pub fn page_loading(&mut self) {
+        self.loading = true;
+        self.pending = None;
+    }
+
+    fn asked(&mut self, tab: Option<&str>) {
+        self.pending = tab.filter(|_| self.loading).map(str::to_owned);
+    }
+
+    pub fn page_ready(&mut self) -> Option<String> {
+        self.loading = false;
+        self.pending.take()
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct OpeningWatch {
@@ -699,9 +743,9 @@ impl Workspace {
         let point = tip(header_button("header-point", Glyph::Pointer, Some("Point"), self.annotating, compact), point_text.into())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
-        let drawer = page.and_then(|p| p.drawer.clone());
-        let drawer_in_page = session.kind != Backend::Marimo;
-        let share = (shown && (endeavor || !drawer_in_page)).then(|| {
+        let drawer = header_drawer(session.kind, shown, page, &self.page);
+        let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
+        let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
                 .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
@@ -712,15 +756,15 @@ impl Workspace {
                 .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                 .into_any_element()
         });
-        let drawers = (shown && endeavor && drawer_in_page).then(|| {
-            [
-                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
-                    .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
-                    .into_any_element(),
-            ]
+        let docs = tools.contains(&HeaderTool::Docs).then(|| {
+            tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
+                .into_any_element()
+        });
+        let status = tools.contains(&HeaderTool::Status).then(|| {
+            tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
+                .into_any_element()
         });
 
         div()
@@ -738,7 +782,8 @@ impl Workspace {
             .children(busy)
             .when(shown, |d| d.child(point))
             .children(share)
-            .children(drawers.into_iter().flatten())
+            .children(docs)
+            .children(status)
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
     }
@@ -750,6 +795,7 @@ impl Workspace {
 
     pub fn open_drawer(&mut self, tab: Option<&str>, cx: &mut Context<Self>) {
         self.page.drawer = tab.map(str::to_owned);
+        self.drawer_ask.asked(tab);
         self.send_to_page(&serde_json::json!({ "type": "drawer", "tab": tab }), cx);
         cx.notify();
     }
@@ -1679,5 +1725,48 @@ mod tests {
         assert_eq!(export_from(Backend::Marimo, "notebookexport", "n1"), ExportFrom::Runtime("html"));
         assert_eq!(export_from(Backend::Marimo, "notebookfile", "n1"), ExportFrom::Runtime("file"));
         assert_eq!(Backend::ALL.map(notebook_extension), ["jl", "R", "py"]);
+    }
+
+    #[test]
+    fn a_drawer_asked_for_while_the_page_loads_opens_once_it_is_ready_and_never_on_a_later_page() {
+        use super::DrawerAsk;
+        let mut ask = DrawerAsk::default();
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), None, "a ready page took the click itself");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), Some("docs".into()));
+        ask.asked(Some("docs"));
+        assert_eq!(ask.page_ready(), None, "replaying it doesn't ask again");
+        ask.page_loading();
+        assert_eq!(ask.page_ready(), None, "the next notebook opens without it");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        ask.asked(None);
+        assert_eq!(ask.page_ready(), None, "closed again before the page was ready");
+        ask.page_loading();
+        ask.asked(Some("docs"));
+        ask.page_loading();
+        assert_eq!(ask.page_ready(), None, "a click for a page that was replaced before it was ready");
+    }
+
+    #[test]
+    fn the_live_docs_button_shows_open_on_a_python_page_which_never_reports_its_notebook() {
+        use super::{PageState, header_drawer};
+        let open = PageState { drawer: Some("docs".into()), ..Default::default() };
+        assert_eq!(header_drawer(Backend::Marimo, true, None, &open), Some("docs".into()));
+        assert_eq!(header_drawer(Backend::Marimo, false, None, &open), None, "not while another pane shows");
+        assert_eq!(header_drawer(Backend::Pluto, true, None, &open), None, "Julia goes by the page that reported its notebook");
+        assert_eq!(header_drawer(Backend::Pluto, true, Some(&open), &open), Some("docs".into()));
+    }
+
+    #[test]
+    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_status() {
+        use super::{HeaderTool::*, header_tools};
+        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Status]);
+        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Status]);
+        assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
+        assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
+        assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");
     }
 }

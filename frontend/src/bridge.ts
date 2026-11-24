@@ -22,6 +22,7 @@ export type ToApp =
       drawer: "docs" | "status" | null;
     }
   | { type: "asked_visible"; visible: boolean }
+  | { type: "docs"; open: boolean }
   | { type: "run_notebook"; notebook: string }
   | { type: "run_anyway"; notebook: string; cells: { id: string; last_run: number }[] }
   | { type: "answer_card"; notebook: string; card: number }

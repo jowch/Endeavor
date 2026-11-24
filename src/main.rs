@@ -471,6 +471,7 @@ pub struct Workspace {
     login_node_ok: HashSet<String>,
     questions_tx: UnboundedSender<remote::Question>,
     page: annotate::PageState,
+    drawer_ask: notebook_pane::DrawerAsk,
     page_context: String,
     window_active: bool,
     last_ask_notice: Option<std::time::Instant>,
@@ -799,6 +800,7 @@ impl Workspace {
             login_node_ok: HashSet::new(),
             questions_tx,
             page: annotate::PageState::default(),
+            drawer_ask: Default::default(),
             page_context: String::new(),
             window_active: true,
             last_ask_notice: None,
@@ -1985,6 +1987,7 @@ impl Workspace {
         let url = kind.notebook_url(&runtime.page_url, id, &path);
         #[cfg(debug_assertions)]
         let url = if notebook_pane::test_stuck_opening().is_some_and(|keep| keep) { "about:blank".to_owned() } else { url };
+        self.drawer_ask.page_loading();
         self.webview.update(cx, |w, _| w.load_url(&url));
     }
 
@@ -1997,12 +2000,19 @@ impl Workspace {
                 self.push_cells(cx);
                 self.apply_look(cx);
                 self.sync_page_context(cx);
+                if let Some(tab) = self.drawer_ask.page_ready() {
+                    self.open_drawer(Some(&tab), cx);
+                }
             }
             Some(annotate::Message::OutOfStep) => self.on_out_of_step(cx),
             Some(annotate::Message::State(state)) => return self.on_page_state(state, cx),
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
             Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),
             Some(annotate::Message::AnswerCard { notebook, card }) => self.answer_card(notebook, card, cx),
+            Some(annotate::Message::Docs(open)) => {
+                self.page.drawer = open.then(|| "docs".to_owned());
+                cx.notify();
+            }
             Some(annotate::Message::AskedVisible(visible)) => {
                 if let Some(key) = self.active {
                     self.with_session(key, cx, |s| s.asks.cells_visible = Some(visible));
