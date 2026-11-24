@@ -6,6 +6,7 @@ use gpui::*;
 use crate::agent::Agent;
 use crate::session::Session;
 use crate::theme::FocusRing as _;
+use crate::theme::TabStop as _;
 use crate::{Workspace, context_ring, theme};
 
 pub const HOVER_DELAY: Duration = Duration::from_millis(400);
@@ -196,6 +197,7 @@ impl Workspace {
                             .text_color(gpui::white())
                             .text_size(theme::size_meta())
                             .cursor_pointer()
+                            .tab_stop_on(theme::popover_bg())
                             .child("Summarize now…")
                             .on_click(cx.listener(|this, _, window, cx| this.summarize_now(window, cx))),
                     ),

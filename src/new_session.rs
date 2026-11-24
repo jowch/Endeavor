@@ -20,7 +20,9 @@ use crate::session::folder_name;
 use crate::turtle::{self, Pose};
 use crate::{Workspace, theme, when};
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NotebookChoice {
@@ -38,18 +40,17 @@ impl NotebookChoice {
 }
 
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
+    kinds_on(host, cfg!(windows))
+}
+
+fn kinds_on(host: &HostId, windows: bool) -> &'static [Backend] {
     match host {
-        HostId::ThisMac if cfg!(windows) => &[Backend::Pluto],
-        host if shows_python(host) => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
-        _ => &Backend::ALL,
+        HostId::ThisMac if windows => &[Backend::Pluto, Backend::Marimo],
+        _ => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
     }
 }
 
-pub const SHOWS_PYTHON: bool = cfg!(not(windows));
-
-pub fn shows_python(host: &HostId) -> bool {
-    SHOWS_PYTHON && *host == HostId::ThisMac
-}
+pub const OFFERS_OWN_UV: bool = cfg!(not(windows));
 
 pub fn kind_of_path(path: &str) -> Backend {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
@@ -655,7 +656,7 @@ impl Workspace {
                         if rows.is_empty() {
                             d.child(self.render_examples(cx))
                         } else {
-                            d.child(div().mt(px(18.)).mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("Pick up where you left off"))
+                            d.child(div().mt(px(18.)).mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(theme::words("pick-up-where-you-left", "Pick up where you left off")))
                                 .children(rows)
                         }
                     }),
@@ -694,6 +695,7 @@ impl Workspace {
                 .mr(px(-8.))
                 .rounded(px(6.))
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .text_color(theme::text_secondary())
                 .hover(|s| s.bg(theme::row_active()))
                 .child(glyph_at(icon, theme::text_muted(), 14. / 12.))
@@ -717,7 +719,7 @@ impl Workspace {
             .pl(px(4.))
             .flex()
             .flex_col()
-            .child(div().mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child("Try one of these, or ask in your own words"))
+            .child(div().mb(px(4.)).text_size(theme::size_meta()).text_color(theme::text_muted()).child(theme::words("try-one-of-these-or", "Try one of these, or ask in your own words")))
             .children(rows)
     }
 
@@ -754,6 +756,7 @@ impl Workspace {
                                 .px(px(8.))
                                 .rounded(px(4.))
                                 .cursor_pointer()
+                                .tab_stop_on(theme::bg_page())
                                 .bg(theme::bg_raised())
                                 .text_color(theme::text_primary())
                                 .button_text("Start Julia")
@@ -978,6 +981,7 @@ impl Workspace {
                 .id("paste-salloc")
                 .role(Role::Button)
                 .cursor_pointer()
+                .tab_stop_on(theme::popover_bg())
                 .text_size(theme::size_meta())
                 .text_color(theme::accent_text())
                 .button_text("Paste an salloc line…")
@@ -1012,6 +1016,7 @@ impl Workspace {
                             .items_center()
                             .rounded(px(5.))
                             .cursor_pointer()
+                            .tab_stop_on(theme::popover_bg())
                             .bg(theme::accent())
                             .text_color(gpui::white())
                             .text_size(theme::size_meta())
@@ -1074,7 +1079,7 @@ impl Workspace {
                     .child(div().flex_1().child(Input::new(&self.draft.search).appearance(false).text_size(theme::size_body()))),
             )
             .child(section_label("Recent"))
-            .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child("No matching folders")))
+            .when(rows.is_empty(), |d| d.child(div().px(px(8.)).py(px(4.)).pl(px(28.)).text_color(theme::text_faint()).child(theme::words("no-matching-folders", "No matching folders"))))
             .children(rows)
             .child(div().h(px(1.)).my(px(4.)).mx(px(8.)).bg(theme::popover_edge()))
             .child(
@@ -1102,6 +1107,7 @@ impl Workspace {
                 .px(px(3.))
                 .rounded(px(3.))
                 .cursor_pointer()
+                .tab_stop_on(theme::popover_bg())
                 .text_color(theme::text_secondary())
                 .hover(|s| s.bg(theme::menu_hover()))
                 .child(name)
@@ -1176,6 +1182,7 @@ impl Workspace {
                         .items_center()
                         .rounded(px(5.))
                         .cursor_pointer()
+                        .tab_stop_on(theme::popover_bg())
                         .bg(theme::accent())
                         .text_color(gpui::white())
                         .button_text("Choose this folder")
@@ -1230,7 +1237,7 @@ impl Workspace {
                     }))
             }))
             .child(section_label(format!("In {}", host.folder_name(&folder))))
-            .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("No notebooks in this folder")))
+            .when(rows.is_empty(), |d| d.child(div().py(px(4.)).pl(px(28.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(theme::words("no-notebooks-in-this-folder", "No notebooks in this folder"))))
             .child(div().id("notebook-rows").max_h(px(300.)).overflow_y_scroll().flex().flex_col().children(rows))
     }
 
@@ -1275,13 +1282,13 @@ impl Workspace {
                     .justify_center()
                     .items_baseline()
                     .text_size(theme::size_meta())
-                    .child("It's saved as a file in\u{a0}")
+                    .child(theme::words("it-s-saved-as-a", "It's saved as a file in\u{a0}"))
                     .child(
                         div()
                             .min_w_0()
                             .max_w_full()
                             .flex()
-                            .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::text_secondary()).child(self.draft_tilde(folder)))
+                            .child(div().min_w_0().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::text_secondary()).child(theme::words("saved-in-folder", self.draft_tilde(folder))))
                             .child(div().flex_shrink_0().child(".")),
                     );
                 turtle_pane()
@@ -1294,8 +1301,8 @@ impl Workspace {
                             .gap(px(4.))
                             .text_center()
                             .text_color(theme::text_muted())
-                            .child(div().text_size(theme::size_subhead()).line_height(px(22.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child("Your notebook will appear here"))
-                            .child(crate::agent_text!(self.draft_agent(), "", " writes the code in it and runs it. You can read and change every cell yourself."))
+                            .child(div().text_size(theme::size_subhead()).line_height(px(22.)).font_weight(FontWeight::MEDIUM).text_color(theme::text_primary()).child(theme::words("your-notebook-will-appear-here", "Your notebook will appear here")))
+                            .child(theme::words("agent-writes", crate::agent_text!(self.draft_agent(), "", " writes the code in it and runs it. You can read and change every cell yourself.")))
                             .child(saved_in),
                     )
                     .into_any_element()
@@ -1410,6 +1417,7 @@ pub(crate) fn menu_row(id: impl Into<ElementId>, checked: bool, selected: bool, 
         .px(px(8.))
         .rounded(px(5.))
         .cursor_pointer()
+        .tab_stop_inside()
         .when(selected, |d| d.bg(theme::menu_hover()))
         .hover(|s| s.bg(theme::menu_hover()))
         .child(div().w(px(10.)).flex_shrink_0().text_size(theme::size_meta()).text_color(theme::accent_text()).child(if checked { "✓" } else { "" }))
@@ -1450,9 +1458,13 @@ fn gear_button(id: impl Into<ElementId>, group: impl Into<SharedString>) -> Stat
         .items_center()
         .justify_center()
         .rounded(px(4.))
-        .invisible()
-        .group_hover(group, |s| s.visible())
+        .opacity(0.)
+        .group_hover(group, |s| s.opacity(1.))
         .hover(|s| s.bg(theme::bg_raised()))
+        .focusable()
+        .tab_stop(true)
+        .keeps_keyboard_on_click()
+        .focus_visible(|s| s.opacity(1.).shadow(theme::ring(theme::popover_bg())))
         .child(glyph(Glyph::Gear, theme::text_muted()))
 }
 
@@ -1867,9 +1879,16 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
 
 #[cfg(test)]
 mod tests {
-    use super::{NotebookChoice, kind_of_path, short_of, tilde_of};
+    use super::{NotebookChoice, kind_of_path, kinds_on, short_of, tilde_of};
     use crate::hosts::HostId;
     use wire::backend::Backend;
+
+    #[test]
+    fn python_is_offered_everywhere_and_r_not_yet_on_windows() {
+        assert_eq!(kinds_on(&HostId::ThisMac, true), [Backend::Pluto, Backend::Marimo]);
+        assert_eq!(kinds_on(&HostId::ThisMac, false), [Backend::Pluto, Backend::Ember, Backend::Marimo]);
+        assert_eq!(kinds_on(&HostId::Server("lab".into()), true), [Backend::Pluto, Backend::Ember, Backend::Marimo]);
+    }
 
     #[test]
     fn a_remembered_auto_asks_to_run_on_an_existing_notebook() {

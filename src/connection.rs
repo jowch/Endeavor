@@ -23,6 +23,7 @@ use crate::turtle::{self, Pose};
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -778,6 +779,7 @@ impl Workspace {
             .when(small, |d| d.px(px(8.)).rounded(px(4.)))
             .when(!small, |d| d.px_3().py_1().rounded_sm())
             .cursor_pointer()
+            .tab_stop_on(theme::bg_page())
             .bg(theme::bg_raised())
             .text_color(theme::text_primary())
             .button_text(fix.label())
@@ -1151,8 +1153,7 @@ impl Workspace {
         for (key, folder, kind) in folders {
             self.note_session_kind(host, key, kind);
             let bridge = bridge.clone();
-            let on = host.clone();
-            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind, &on) }).detach();
+            cx.background_executor().spawn(async move { pluto::set_session_folder(&bridge, key, &folder, kind) }).detach();
         }
         for (key, policy, edits) in policies {
             self.send_policy(key, policy, edits, cx);
@@ -1932,7 +1933,7 @@ impl Workspace {
     pub fn host_pane(&self, host: &HostId, kind: Backend, start: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.host_pane_state(host, kind, cx)?;
         let connection = self.connections.get(host);
-        let name = self.hosts.name(host);
+        let name = self.hosts.mid_sentence_name(host);
         let action = |id: &'static str, label: &'static str, host: HostId, start_julia: bool| {
             div()
                 .id(id)
@@ -1941,6 +1942,7 @@ impl Workspace {
                 .py_1()
                 .rounded_sm()
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .bg(theme::accent())
                 .text_color(gpui::white())
                 .button_text(label)
@@ -1991,6 +1993,7 @@ impl Workspace {
                     .py_1()
                     .rounded_sm()
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .bg(theme::accent())
                     .text_color(gpui::white())
                     .button_text("Try again")
@@ -2000,39 +2003,48 @@ impl Workspace {
             }
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
-                let offer = own_r_offered().filter(|_| *host == HostId::ThisMac && error.starts_with("r_not_found::"));
-                let button = |id: &'static str, label: &'static str, install: Option<Backend>| {
+                let shows = r_failed_shows(host, &error, self.hosts.downloads_own_uv(host), own_r_offered());
+                let button = |label: &'static str, install: Option<Backend>| {
                     let host = host_id.clone();
                     div()
-                        .id(id)
+                        .id(shows.button())
                         .role(Role::Button)
                         .px_3()
                         .py_1()
                         .rounded_sm()
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .bg(theme::accent())
                         .text_color(gpui::white())
                         .button_text(label)
                         .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, install, cx)))
                 };
-                if uv_offered(&host_id, &error) {
-                    let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {}.", crate::platform::this_computer!(lower));
-                    resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("uv-install", "Install uv", Some(Backend::Marimo)))
-                } else if let Some(why) = pluto::python_failed(&error) {
-                    let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
-                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("python-retry", "Try again", None))
-                } else if let Some(item) = offer {
-                    let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
-                    let words = format!(
-                        "Endeavor can install its own {}{size}, just for Endeavor. It changes nothing else on {}.",
-                        item.name,
-                        crate::platform::this_computer!(lower)
-                    );
-                    resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("r-install", "Install R", Some(Backend::Ember)))
-                } else {
-                    let why = pluto::r_failed(&error).unwrap_or(&error);
-                    let heading = if why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
-                    resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("r-retry", "Try again", None))
+                match &shows {
+                    RFailedShows::InstallUv => {
+                        let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {name}.");
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", Some(Backend::Marimo)))
+                    }
+                    RFailedShows::NoUv => {
+                        let words = format!("Python notebooks need uv. Install it on {name} (docs.astral.sh/uv), then try again.");
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", None))
+                    }
+                    RFailedShows::PythonFailed(why) => {
+                        let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                    }
+                    RFailedShows::InstallR(item) => {
+                        let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
+                        let words = format!(
+                            "Endeavor can install its own {}{size}, just for Endeavor. It changes nothing else on {}.",
+                            item.name,
+                            crate::platform::this_computer!(lower)
+                        );
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("Install R", Some(Backend::Ember)))
+                    }
+                    RFailedShows::RFailed(why) => {
+                        let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                    }
                 }
             }
             HostPane::Starting => {
@@ -2045,6 +2057,7 @@ impl Workspace {
                         .role(Role::Button)
                         .mt(px(4.))
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .underline()
                         .text_size(theme::size_meta())
                         .text_color(theme::text_muted())
@@ -2108,8 +2121,41 @@ fn is_python_failure(error: &str) -> bool {
     pluto::python_failed(error).is_some()
 }
 
-fn uv_offered(host: &HostId, error: &str) -> bool {
-    crate::new_session::SHOWS_PYTHON && *host == HostId::ThisMac && error.starts_with("python_not_found::")
+#[derive(Debug, PartialEq)]
+pub enum RFailedShows<'a> {
+    InstallUv,
+    NoUv,
+    PythonFailed(&'a str),
+    InstallR(wire::Item),
+    RFailed(&'a str),
+}
+
+impl RFailedShows<'_> {
+    pub fn button(&self) -> &'static str {
+        match self {
+            RFailedShows::InstallUv => "uv-install",
+            RFailedShows::NoUv => "python-retry",
+            RFailedShows::PythonFailed(_) => "python-retry",
+            RFailedShows::InstallR(_) => "r-install",
+            RFailedShows::RFailed(_) => "r-retry",
+        }
+    }
+}
+
+const UV_WONT_START: &str = "python_not_found::Couldn't start uv";
+
+pub fn r_failed_shows<'a>(host: &HostId, error: &'a str, own_uv_there: bool, own_r: Option<wire::Item>) -> RFailedShows<'a> {
+    let here = *host == HostId::ThisMac;
+    if error.starts_with("python_not_found::") && !error.starts_with(UV_WONT_START) {
+        return if own_uv_there { RFailedShows::InstallUv } else { RFailedShows::NoUv };
+    }
+    if let Some(why) = pluto::python_failed(error) {
+        return RFailedShows::PythonFailed(why);
+    }
+    match own_r.filter(|_| here && error.starts_with("r_not_found::")) {
+        Some(item) => RFailedShows::InstallR(item),
+        None => RFailedShows::RFailed(pluto::r_failed(error).unwrap_or(error)),
+    }
 }
 
 pub fn own_r_offered() -> Option<wire::Item> {
@@ -2500,8 +2546,41 @@ mod tests {
         assert_eq!(pane_failure(Backend::Marimo, "open_stuck::It's still opening.").as_deref(), Some("python_failed::It's still opening."));
         assert_eq!(pane_failure(Backend::Marimo, "r_failed::R stopped while starting"), None);
         assert!(super::is_python_failure(no_uv) && !super::is_python_failure("r_not_found::No R here"));
-        assert_eq!(super::uv_offered(&crate::hosts::HostId::ThisMac, no_uv), crate::new_session::SHOWS_PYTHON);
-        assert!(!super::uv_offered(&crate::hosts::HostId::ThisMac, "python_failed::marimo stopped"));
+    }
+
+    #[test]
+    fn a_missing_uv_offers_endeavors_own_only_where_there_is_one() {
+        use super::{RFailedShows, r_failed_shows};
+        use crate::hosts::HostId;
+        let offer = "python_not_found::Python notebooks need uv, which isn't installed here, and Endeavor may download its own only if the user agrees: uv 0.11.32 (about 26 MB, into /home/u/.cache/endeavor/uv-0.11.32). Ask the user; only if they agree, call `use_machine` with `machine` \"local\" and `install: true`, then make this call again. The user can also install uv themselves: https://docs.astral.sh/uv/getting-started/installation/.";
+        let offer_in_app = "python_not_found::Python notebooks need uv, which isn't installed on this computer. Endeavor can download its own uv if the user agrees: uv 0.11.32 (about 26 MB). Tell the user to start a new Python session in Endeavor and click Install uv in its notebook pane, or to install uv themselves (https://docs.astral.sh/uv/getting-started/installation/). Once it's installed, open the notebook again.";
+        let no_uv = "python_not_found::Python notebooks need uv, which isn't installed. Install it (https://docs.astral.sh/uv/getting-started/installation/), then try again.";
+        let here = HostId::ThisMac;
+        let lab = HostId::Server("lab".into());
+        for said in [offer, offer_in_app, no_uv] {
+            assert_eq!(r_failed_shows(&here, said, true, None), RFailedShows::InstallUv);
+            assert_eq!(r_failed_shows(&lab, said, true, None).button(), "uv-install");
+            assert_eq!(r_failed_shows(&here, said, false, None), RFailedShows::NoUv, "Windows: {said}");
+            assert_eq!(r_failed_shows(&lab, said, false, None), RFailedShows::NoUv, "a Slurm job: {said}");
+        }
+        assert_eq!(RFailedShows::NoUv.button(), "python-retry");
+        let noexec = "python_not_found::Couldn't start uv (/home/u/.cache/endeavor/uv-0.11.32/uv): Permission denied (os error 13)";
+        for own_uv in [true, false] {
+            assert_eq!(r_failed_shows(&lab, noexec, own_uv, None), RFailedShows::PythonFailed("Couldn't start uv (/home/u/.cache/endeavor/uv-0.11.32/uv): Permission denied (os error 13)"));
+        }
+        assert_eq!(r_failed_shows(&here, "python_failed::Couldn't download uv: offline", true, None), RFailedShows::PythonFailed("Couldn't download uv: offline"));
+    }
+
+    #[test]
+    fn a_missing_r_offers_endeavors_own_only_on_this_computer() {
+        use super::{RFailedShows, r_failed_shows};
+        use crate::hosts::HostId;
+        let item = wire::Item { kind: "r".into(), name: "R 4.5".into(), size_mb: Some(90), place: None };
+        let no_r = "r_not_found::No R here";
+        assert_eq!(r_failed_shows(&HostId::ThisMac, no_r, true, Some(item.clone())), RFailedShows::InstallR(item.clone()));
+        assert_eq!(r_failed_shows(&HostId::ThisMac, no_r, true, None), RFailedShows::RFailed("No R here"));
+        assert_eq!(r_failed_shows(&HostId::Server("lab".into()), no_r, true, Some(item)).button(), "r-retry");
+        assert_eq!(r_failed_shows(&HostId::ThisMac, "r_failed::R stopped", true, None), RFailedShows::RFailed("R stopped"));
     }
 
     #[test]

@@ -12,6 +12,8 @@ use crate::row_marks::{self, RowFacts, RowMark};
 use crate::session::Session;
 use crate::{Interrupt, NewSession, OpenSettings, SIDEBAR_RANGE, Workspace, column_header, connection, platform, save_json, settings_panel, sidebar_filter, sidebar_toggle, theme};
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
+use crate::theme::TabStop as _;
 
 fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
     div()
@@ -25,6 +27,10 @@ fn sidebar_row(id: ElementId, active: bool) -> Stateful<Div> {
         .px(px(10.))
         .border_2()
         .border_color(gpui::transparent_black())
+        .focusable()
+        .tab_stop(true)
+        .keeps_keyboard_on_click()
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .rounded(px(4.))
         .cursor_pointer()
         .text_color(if active { theme::text_row_active() } else { theme::text_muted() })
@@ -142,7 +148,7 @@ fn bullet_slot() -> Div {
 }
 
 fn end_button(id: impl Into<ElementId>) -> Stateful<Div> {
-    div().id(id).role(Role::Button).flex_shrink_0().size(px(24.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
+    div().id(id).role(Role::Button).tab_stop_on(theme::bg_sidebar()).flex_shrink_0().size(px(24.)).mr(px(-6.)).flex().items_center().justify_center().rounded(px(4.))
 }
 
 fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> Stateful<Div> {
@@ -155,6 +161,7 @@ fn more_button(id: impl Into<ElementId>, group: SharedString, shown: bool) -> St
         .text_color(if shown { theme::text_muted().into() } else { gpui::transparent_black() })
         .group_hover(group, |s| s.text_color(theme::text_muted()))
         .hover(|s| s.text_color(theme::text_primary()))
+        .focus_visible(|s| s.shadow(theme::ring(theme::bg_sidebar())).text_color(theme::text_muted()))
         .child("⋮")
 }
 
@@ -790,6 +797,7 @@ impl Workspace {
             .border_color(gpui::transparent_black())
             .track_focus(&self.dialog_focus(format!("folder-toggle-{key}"), cx))
             .tab_stop(true)
+            .keeps_keyboard_on_click()
             .focus_visible(|s| s.border_color(theme::focus_ring()))
             .hover(|s| s.bg(theme::row_active()))
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(label))
@@ -1025,6 +1033,7 @@ impl Workspace {
                             .border_color(gpui::transparent_black())
                             .track_focus(&self.dialog_focus("settings-gear", cx))
                             .tab_stop(true)
+                            .keeps_keyboard_on_click()
                             .focus_ring_on(theme::bg_sidebar())
                             .text_color(if self.settings_panel.is_some() { theme::text_primary() } else { theme::text_faint() })
                             .when(self.settings_panel.is_some(), |d| d.bg(theme::row_active()))
@@ -1216,6 +1225,7 @@ impl Workspace {
                 .px(px(8.))
                 .rounded(px(5.))
                 .cursor_pointer()
+                .tab_stop_inside()
                 .when(selected, |d| d.bg(theme::menu_hover()))
                 .hover(|s| s.bg(theme::menu_hover()))
                 .child(div().flex_1().child(label))
@@ -1234,6 +1244,7 @@ impl Workspace {
             .flex_shrink_0()
             .rounded(px(9.))
             .cursor_pointer()
+            .tab_stop_on(theme::popover_bg())
             .bg(if filters.show_empty_folders { theme::accent() } else { theme::composer_edge() })
             .child(div().absolute().top(px(2.)).left(px(if filters.show_empty_folders { 14. } else { 2. })).size(px(14.)).rounded_full().bg(gpui::white()))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -1276,7 +1287,7 @@ impl Workspace {
                     .items_center()
                     .h(px(28.))
                     .px(px(8.))
-                    .child(div().flex_1().child("Show empty folders"))
+                    .child(div().flex_1().child(theme::words("show-empty-folders", "Show empty folders")))
                     .child(empty_toggle),
             )
             .when(!filters.is_default(), |d| {
@@ -1291,6 +1302,7 @@ impl Workspace {
                         .items_center()
                         .rounded(px(5.))
                         .cursor_pointer()
+                        .tab_stop_inside()
                         .hover(|s| s.bg(theme::menu_hover()))
                         .child("Clear filters")
                         .on_click(cx.listener(|this, _, window, cx| this.clear_filters(window, cx))),

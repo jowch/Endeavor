@@ -16,6 +16,7 @@ use crate::session::{self, Entry, ModeChoice, Session};
 use crate::slash::{self, Listing, Own};
 use crate::{Workspace, theme, tool_button};
 use crate::theme::FocusRing as _;
+use crate::theme::TabStop as _;
 
 actions!(composer, [AddFiles, ListUp, ListDown, ListPick, ListFill, PickMode1, PickMode2, PickMode3, PickMode4]);
 
@@ -285,7 +286,13 @@ fn popup() -> Div {
 }
 
 fn popup_row(id: ElementId, selected: bool, role: Role, name: impl Into<SharedString>) -> Stateful<Div> {
-    inert_row(id).role(role).aria_label(name).cursor_pointer().when(selected, |d| d.bg(theme::menu_hover())).hover(|s| s.bg(theme::menu_hover()))
+    inert_row(id)
+        .role(role)
+        .aria_label(name)
+        .cursor_pointer()
+        .when(role != Role::ListBoxOption, |d| d.tab_stop_inside())
+        .when(selected, |d| d.bg(theme::menu_hover()))
+        .hover(|s| s.bg(theme::menu_hover()))
 }
 
 fn inert_row(id: ElementId) -> Stateful<Div> {
@@ -1185,7 +1192,7 @@ impl Workspace {
                 .aria_label("Files in this session's folder")
                 .left_0()
                 .right_0()
-                .child(div().px(px(8.)).pt(px(2.)).pb(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child("Files in this session's folder"))
+                .child(div().px(px(8.)).pt(px(2.)).pb(px(4.)).text_size(theme::chat_meta_small()).text_color(theme::text_faint()).child(theme::words("files-in-this-session-s", "Files in this session's folder")))
                 .children(rows)
                 .children(status.map(|s| div().px(px(8.)).py(px(4.)).text_size(theme::chat_meta()).text_color(theme::text_muted()).child(s)));
             return Some(above(div().left_0().right_0()).child(list).into_any_element());
@@ -1201,7 +1208,7 @@ impl Workspace {
                     .child(
                         popup_row("plus-files".into(), false, Role::MenuItem, "Add files or photos")
                             .child(glyph(Glyph::File, theme::text_muted()))
-                            .child(div().flex_1().child("Add files or photos"))
+                            .child(div().flex_1().child(theme::words("add-files-or-photos", "Add files or photos")))
                             .child(div().text_size(theme::chat_meta()).text_color(theme::text_faint()).child(crate::platform::shortcut!("U")))
                             .on_click(cx.listener(|this, _, window, cx| this.add_files(&AddFiles, window, cx))),
                     )
@@ -1471,6 +1478,7 @@ impl Workspace {
                                 .border_1()
                                 .border_color(theme::control_edge())
                                 .cursor_pointer()
+                                .tab_stop_on(theme::composer_bg())
                                 .text_color(theme::text_primary())
                                 .hover(|s| s.bg(theme::composer_edge()))
                                 .child("Show in notebook →")

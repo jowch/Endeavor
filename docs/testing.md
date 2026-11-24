@@ -181,15 +181,19 @@ To wait for something, poll the dump. For example, loop until
     `starting`, `julia_starting` (the runtime is up and Julia is starting,
     for whoever asked; `reason` is the step), `julia_failed`, `r_starting`
     and `r_failed` (the same for an R notebook's R and Ember),
-    `stopping`, `julia_not_running` (`r_not_running` for an R session) or `not_connected`, with the
-    host and the reason.
+    `python_starting` and `python_failed` (the same for a Python notebook's
+    uv and marimo), `stopping`, `julia_not_running` (`r_not_running` or
+    `python_not_running` for an R or Python session) or `not_connected`,
+    with the host and the reason. A failed R or Python pane also names its
+    `button`: `uv-install`, `python-retry`, `r-install` or `r-retry`.
   - `stopped`: the notebook was stopped. `stopped.idle_hours` is set when it
     stopped for being idle.
   - `crashed`: its own Julia stopped by itself: "Julia stopped unexpectedly".
     The runtime's notebook list says so (`exited`, with the cells that were
     running), and so does the page.
     (All of a host's Julia stopping shows as `host`, with `host_pane.kind`
-    `julia_crashed`, `r_crashed` in an R session, and the same page.)
+    `julia_crashed`, `r_crashed` or `python_crashed` in an R or Python
+    session, and the same page.)
 
   `crash` is null unless Julia stopped by itself under the notebook: its
   `state` (`stopped`, `rerunning` after Restart Julia until that run is
@@ -430,6 +434,9 @@ These are read by debug builds only.
   `<file>.done`. It lets a check run on a computer where nothing can click.
   - `open <notebook path>` starts a session on this computer in the
     notebook's folder, on that notebook, which opens in safe preview.
+  - `new <kind> <folder>` starts a session on a new notebook (`pluto`, `ember`
+    or `marimo`) in that folder on this computer; `new <kind> on <server id>
+    <folder>` starts it on that server.
   - `run` is the callout's Run notebook.
   - `settings` and `close settings` open and close Settings.
   - `js <script>` runs the script in the notebook page the user sees, and

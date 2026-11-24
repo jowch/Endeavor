@@ -4,6 +4,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::new_session::{Glyph, glyph};
 use crate::{Workspace, theme, webcontent};
+use crate::theme::TabStop as _;
 
 pub struct FindBar {
     pub input: Entity<InputState>,
@@ -89,7 +90,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
-                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(theme::row_active())))
+                .when(enabled, |d| d.cursor_pointer().tab_stop_on(theme::bg_page()).hover(|s| s.bg(theme::row_active())))
                 .child(glyph(icon, if enabled { theme::text_muted() } else { theme::text_section() }))
                 .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
         };
