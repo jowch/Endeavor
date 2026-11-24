@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-# atspi-tree.py [NAME]: print Endeavor's accessibility tree on Linux, as a
-# screen reader (Orca) gets it over AT-SPI: each node's role, name,
-# description, states and actions, indented by depth. With NAME, click the
-# first node of that name instead, the way a screen reader activates it.
-#
-# GPUI builds the tree only once a screen reader is on, so the app must start
-# on a session bus with the accessibility bus running and switched on (in a
-# cloud session, see docs/cloud.md). Needs the AT-SPI typelib
-# (gir1.2-atspi-2.0) and a Python whose `gi` matches it.
 import sys
 
 import gi

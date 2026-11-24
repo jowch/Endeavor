@@ -1,23 +1,4 @@
 #!/usr/bin/env swift
-// ax-tree.swift PID [MAX_DEPTH]: print the macOS accessibility tree of the
-// process with the given pid, as VoiceOver would see it. Walks
-// AXUIElementCreateApplication(pid) -> AXChildren, printing each node's role,
-// identifier, label, description, value and supported actions, indented by
-// depth. MAX_DEPTH defaults to 14 (deep enough for a dialog or a menu; the
-// notebook's web view can nest much deeper, so pass a smaller depth there).
-//
-// ax-tree.swift PID focused: print just the element that currently has
-// keyboard focus -- the fast way to check where Tab/Shift-Tab landed, without
-// diffing a whole tree dump. The app's kAXFocusedUIElementAttribute names only
-// the window here, so this prints the elements whose AXFocused is true. The
-// first query of a run turns the app's accessibility tree on and shows only
-// the window; query again.
-//
-// Needs Accessibility permission for whatever process runs this (Terminal,
-// Ghostty, or the like) -- the same permission target/ui-tools needs.
-//
-// Run directly: scripts/ax-tree.swift PID
-// or: swift scripts/ax-tree.swift PID
 
 import ApplicationServices
 import Foundation

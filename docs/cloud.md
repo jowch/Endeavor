@@ -179,10 +179,32 @@ python3.12 scripts/atspi-tree.py         # the tree, as Orca gets it
 python3.12 scripts/atspi-tree.py "Sign in"   # click a node by name, as a screen reader does
 ```
 
-The system `python3` may not match the installed `gi`; `python3.12` does on
-this VM. AccessKit on Linux and macOS doesn't pass on whether a control is
-expanded; only Windows does. On a Mac, `scripts/ax-tree.swift` reads the
-same tree as VoiceOver gets it.
+`scripts/atspi-tree.py` prints each node's role, name, description, states
+and actions, indented by depth. With a name, it clicks the first node of
+that name instead, the way a screen reader activates it. It needs the AT-SPI
+typelib (`gir1.2-atspi-2.0`) and a Python whose `gi` matches it: the system
+`python3` may not, and `python3.12` does on this VM. AccessKit on Linux and
+macOS doesn't pass on whether a control is expanded; only Windows does.
+
+On a Mac, `scripts/ax-tree.swift` reads the same tree as VoiceOver gets it.
+It needs Accessibility permission for the program that runs it (Terminal,
+Ghostty or the like), the same permission `target/ui-tools` needs.
+
+```sh
+scripts/ax-tree.swift PID              # or: swift scripts/ax-tree.swift PID
+scripts/ax-tree.swift PID 6            # no deeper than 6 levels
+scripts/ax-tree.swift PID focused      # only what has keyboard focus
+```
+
+- It walks from `AXUIElementCreateApplication(pid)` through `AXChildren`,
+  printing each node's role, identifier, label, description, value and
+  actions, indented by depth.
+- The default depth, 14, is deep enough for a dialog or a menu. The
+  notebook's web view nests much deeper, so pass a smaller depth there.
+- `focused` is the quick way to see where Tab or Shift-Tab landed. The app's
+  `kAXFocusedUIElementAttribute` names only the window, so it prints the
+  elements whose `AXFocused` is true. The first query of a run turns the
+  app's tree on and shows only the window, so query again.
 
 A signed-in Claude hides the sign-in card. To see it, start the app with
 `ENDEAVOR_CLAUDE_CLI` set to a script that prints `{"loggedIn": false}` for
