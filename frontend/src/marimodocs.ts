@@ -9,11 +9,11 @@ const POLL_MS = 50;
 const css = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: 0; right: 0; bottom: 0; top: auto; width: auto !important;
-    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
+    height: 42vh; flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
-    padding-bottom: var(--endeavor-drawer-h, 42vh); }
+    padding-bottom: 42vh; }
   @media print { html[data-endeavor-drawer="docs"] ${PANEL} { display: none !important; } }
 `;
 
@@ -49,7 +49,6 @@ export function initMarimoDocs(): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
-  document.documentElement.style.setProperty("--endeavor-drawer-h", `${Math.round(window.innerHeight * 0.42)}px`);
   const press = () => document.querySelector<HTMLElement>(DOCS_OPTION)?.click();
   const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
   on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow));
