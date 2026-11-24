@@ -38,8 +38,12 @@ impl NotebookChoice {
 }
 
 pub fn new_kinds(host: &HostId) -> &'static [Backend] {
+    kinds_on(host, cfg!(windows))
+}
+
+fn kinds_on(host: &HostId, windows: bool) -> &'static [Backend] {
     match host {
-        HostId::ThisMac if cfg!(windows) => &[Backend::Pluto],
+        HostId::ThisMac if windows => &[Backend::Pluto, Backend::Marimo],
         host if shows_python(host) => &[Backend::Pluto, Backend::Ember, Backend::Marimo],
         _ => &Backend::ALL,
     }
@@ -1867,6 +1871,14 @@ pub(crate) fn glyph_at(glyph: Glyph, color: Rgba, scale: f32) -> impl IntoElemen
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn python_is_offered_on_this_computer_on_every_platform_and_r_not_yet_on_windows() {
+        use super::{Backend, HostId, kinds_on};
+        assert_eq!(kinds_on(&HostId::ThisMac, true), [Backend::Pluto, Backend::Marimo]);
+        assert_eq!(kinds_on(&HostId::ThisMac, false), [Backend::Pluto, Backend::Ember, Backend::Marimo]);
+        assert!(!kinds_on(&HostId::Server("lab".into()), true).contains(&Backend::Marimo));
+    }
+
     use super::{NotebookChoice, kind_of_path, short_of, tilde_of};
     use crate::hosts::HostId;
     use wire::backend::Backend;
