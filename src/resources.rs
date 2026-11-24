@@ -5,6 +5,7 @@ use wire::slurm::{PRESETS, Partition, Resources, duration_text};
 use crate::new_session::{Glyph, choice_row, glyph};
 use crate::{Workspace, theme};
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 const CPUS: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 const MEM_GB: [u32; 14] = [1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512];
@@ -159,6 +160,7 @@ impl Workspace {
                     .border_1()
                     .border_color(if active { theme::accent() } else { theme::control_edge() })
                     .cursor_pointer()
+                    .tab_stop_on(theme::popover_bg())
                     .hover(|s| s.bg(theme::bg_card()))
                     .text_size(theme::size_meta())
                     .button_text(*name)
@@ -185,6 +187,7 @@ impl Workspace {
             .border_1()
             .border_color(theme::control_edge())
             .cursor_pointer()
+            .tab_stop_on(theme::popover_bg())
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(shown))
             .child(div().flex_none().child(glyph(Glyph::Chevron, theme::text_faint())))
             .on_click(cx.listener(on(Change::TogglePartitions)));
@@ -213,7 +216,7 @@ impl Workspace {
                     .border_1()
                     .border_color(theme::composer_edge())
                     .bg(theme::bg_card())
-                    .when(partitions.is_empty(), |d| d.child(div().px(px(8.)).py(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child("Test connection lists this cluster's partitions.")))
+                    .when(partitions.is_empty(), |d| d.child(div().px(px(8.)).py(px(4.)).text_size(theme::size_meta()).text_color(theme::text_faint()).child(theme::words("test-connection-lists-this-cluster", "Test connection lists this cluster's partitions."))))
                     .children(options)
                     .into_any_element(),
             );
@@ -270,6 +273,7 @@ fn stepper(id: usize, noun: &'static str, value: String, minus: impl Fn(&ClickEv
             .items_center()
             .justify_center()
             .cursor_pointer()
+            .tab_stop_on(theme::popover_bg())
             .text_color(theme::text_muted())
             .hover(|s| s.bg(theme::bg_raised()).text_color(theme::text_primary()))
             .child(text)

@@ -23,6 +23,7 @@ use crate::turtle::{self, Pose};
 use crate::{Workspace, theme};
 use crate::theme::FocusRing as _;
 use crate::theme::TextButton as _;
+use crate::theme::TabStop as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -778,6 +779,7 @@ impl Workspace {
             .when(small, |d| d.px(px(8.)).rounded(px(4.)))
             .when(!small, |d| d.px_3().py_1().rounded_sm())
             .cursor_pointer()
+            .tab_stop_on(theme::bg_page())
             .bg(theme::bg_raised())
             .text_color(theme::text_primary())
             .button_text(fix.label())
@@ -1941,6 +1943,7 @@ impl Workspace {
                 .py_1()
                 .rounded_sm()
                 .cursor_pointer()
+                .tab_stop_on(theme::bg_page())
                 .bg(theme::accent())
                 .text_color(gpui::white())
                 .button_text(label)
@@ -1991,6 +1994,7 @@ impl Workspace {
                     .py_1()
                     .rounded_sm()
                     .cursor_pointer()
+                    .tab_stop_on(theme::bg_page())
                     .bg(theme::accent())
                     .text_color(gpui::white())
                     .button_text("Try again")
@@ -2010,6 +2014,7 @@ impl Workspace {
                         .py_1()
                         .rounded_sm()
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .bg(theme::accent())
                         .text_color(gpui::white())
                         .button_text(label)
@@ -2045,6 +2050,7 @@ impl Workspace {
                         .role(Role::Button)
                         .mt(px(4.))
                         .cursor_pointer()
+                        .tab_stop_on(theme::bg_page())
                         .underline()
                         .text_size(theme::size_meta())
                         .text_color(theme::text_muted())

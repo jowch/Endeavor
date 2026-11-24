@@ -314,6 +314,7 @@ pub struct Session {
     changed_cell_focus: RefCell<HashMap<(usize, usize), FocusHandle>>,
     queue_focus: RefCell<HashMap<(u64, &'static str), FocusHandle>>,
     replies: RefCell<HashMap<usize, (Entity<TextViewState>, Rc<Cell<usize>>, Subscription)>>,
+    spoken_replies: RefCell<HashMap<usize, (String, SharedString)>>,
 }
 
 fn key_of(hash: u64, same: usize) -> u64 {
@@ -540,6 +541,7 @@ impl Session {
             changed_cell_focus: RefCell::new(HashMap::new()),
             queue_focus: RefCell::new(HashMap::new()),
             replies: RefCell::new(HashMap::new()),
+            spoken_replies: RefCell::new(HashMap::new()),
         }
     }
 
@@ -592,6 +594,18 @@ impl Session {
         });
         state.update(cx, |state, cx| state.set_text(text, cx));
         state
+    }
+
+    pub fn reply_spoken(&self, ix: usize, text: &str) -> SharedString {
+        let mut spoken = self.spoken_replies.borrow_mut();
+        match spoken.get(&ix) {
+            Some((source, words)) if source == text => words.clone(),
+            _ => {
+                let words: SharedString = crate::transcript::spoken(text).into();
+                spoken.insert(ix, (text.to_owned(), words.clone()));
+                words
+            }
+        }
     }
 
     pub fn reply_bounds(&self, ix: usize, cx: &App) -> Option<Bounds<Pixels>> {

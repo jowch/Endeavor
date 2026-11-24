@@ -14,6 +14,8 @@ use crate::runs;
 use crate::session::{Entry, Scope, Session, cell_label, file_name, folder_name, option_of_kind, plan_option};
 use crate::theme;
 use crate::theme::FocusRing as _;
+use crate::theme::KeepsKeyboard as _;
+use crate::theme::TabStop as _;
 use crate::transcript::markdown_style;
 
 pub(crate) struct ApprovalView {
@@ -521,6 +523,7 @@ pub fn render_approval(session: &Session, notebook_shown: bool, window: &Window,
                             .role(Role::Link)
                             .aria_label("Show in notebook")
                             .cursor_pointer()
+                            .tab_stop_on(theme::bg_urgent())
                             .text_color(theme::accent_text())
                             .hover(|s| s.underline())
                             .child("Show in notebook →")
@@ -604,6 +607,10 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
         .border_l_0()
         .border_color(theme::control_edge())
         .cursor_pointer()
+        .focusable()
+        .tab_stop(true)
+        .keeps_keyboard_on_click()
+        .focus_visible(|s| s.border_color(theme::focus_ring()))
         .hover(|s| s.bg(theme::bg_raised()))
         .when(open, |d| d.bg(theme::bg_raised()))
         .child(glyph(Glyph::Chevron, theme::text_muted()))
@@ -621,6 +628,7 @@ fn always_split(session: &Session, ix: usize, button: Stateful<Div>, folder: Per
             .py(px(4.))
             .rounded(px(4.))
             .cursor_pointer()
+            .tab_stop_inside()
             .hover(|s| s.bg(theme::menu_hover()))
             .child(label)
             .child(div().text_color(theme::text_faint()).child(hint))
