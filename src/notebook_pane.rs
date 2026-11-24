@@ -1126,9 +1126,8 @@ impl Workspace {
         eprintln!("New notebook for session {key}");
         self.note_session_kind(&host, key, kind);
         let steps = self.julia_steps(&host, kind, cx);
-        let on = host.clone();
         let task = cx.background_executor().spawn(async move {
-            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind, &on) {
+            if let Err(e) = pluto::set_session_folder(&bridge, key, &folder, kind) {
                 eprintln!("New notebook for session {key}: couldn't give the runtime its folder: {e}");
             }
             pluto::until_julia(|| pluto::new_notebook(&bridge, key), &|step| steps.step(step))

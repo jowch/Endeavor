@@ -598,7 +598,7 @@ impl Workspace {
         json!({
             "shows": shows,
             "file": file,
-            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &s.place.host, &self.hosts.name(&s.place.host), s.kind)), _ => None },
+            "host_pane": match &shown { PaneShows::Host(pane) => Some(host_pane(pane, &s.place.host, self.hosts.downloads_own_uv(&s.place.host), &self.hosts.name(&s.place.host), s.kind)), _ => None },
             "starting": (shown == PaneShows::NoNotebook).then(|| self.starting_ahead_line(s, cx)).flatten(),
             "stopped": match &shown { PaneShows::Stopped(st) => Some(json!({ "idle_hours": st.idle_hours, "safe_preview": st.safe_preview })), _ => None },
             "crash": self.notebook_at(s.key).and_then(|at| {
@@ -652,7 +652,7 @@ impl Workspace {
         let Some(folder) = self.draft_pane_folder() else {
             let pane = self.host_pane_state(&self.draft.host, self.draft.notebook.kind(), cx);
             let shows = if pane.is_some() { "host" } else { "empty" };
-            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.draft.host, &self.hosts.name(&self.draft.host), self.draft.notebook.kind())), "header": header });
+            return json!({ "shows": shows, "host_pane": pane.map(|p| host_pane(&p, &self.draft.host, self.hosts.downloads_own_uv(&self.draft.host), &self.hosts.name(&self.draft.host), self.draft.notebook.kind())), "header": header });
         };
         match (&self.draft.notebook, &self.draft.preview) {
             (NotebookChoice::New(_), _) => json!({ "shows": "new_notebook", "saved_in": self.draft_tilde(folder), "header": header }),
@@ -803,7 +803,7 @@ fn chip_label(a: &crate::attach::Attachment) -> String {
     a.label().text()
 }
 
-fn host_pane(pane: &HostPane, host_id: &crate::hosts::HostId, host: &str, kind: wire::backend::Backend) -> Value {
+fn host_pane(pane: &HostPane, host_id: &crate::hosts::HostId, own_uv_there: bool, host: &str, kind: wire::backend::Backend) -> Value {
     let (kind, reason) = match pane {
         HostPane::Lost => ("cant_reach", None),
         HostPane::Starting => ("starting", None),
@@ -819,7 +819,7 @@ fn host_pane(pane: &HostPane, host_id: &crate::hosts::HostId, host: &str, kind: 
         HostPane::NotConnected(reason) => ("not_connected", Some(reason)),
     };
     let button = match pane {
-        HostPane::RFailed(error) => Some(crate::connection::r_failed_shows(host_id, error, crate::new_session::OFFERS_OWN_UV, crate::connection::own_r_offered()).button()),
+        HostPane::RFailed(error) => Some(crate::connection::r_failed_shows(host_id, error, own_uv_there, crate::connection::own_r_offered()).button()),
         _ => None,
     };
     json!({ "kind": kind, "host": host, "reason": reason.filter(|r| !r.is_empty()), "button": button })
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn a_stopped_or_crashed_host_is_named_by_the_sessions_language() {
-        let kind = |pane: HostPane, backend| host_pane(&pane, &crate::hosts::HostId::Server("lab".into()), "lab", backend)["kind"].as_str().unwrap().to_owned();
+        let kind = |pane: HostPane, backend| host_pane(&pane, &crate::hosts::HostId::Server("lab".into()), true, "lab", backend)["kind"].as_str().unwrap().to_owned();
         assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Pluto), "julia_crashed");
         assert_eq!(kind(HostPane::Crashed("oom".into()), Backend::Ember), "r_crashed");
         assert_eq!(kind(HostPane::NotRunning("idle".into()), Backend::Ember), "r_not_running");
@@ -860,10 +860,9 @@ mod tests {
     #[test]
     fn a_failed_python_pane_names_its_button() {
         let no_uv = HostPane::RFailed("python_not_found::Python notebooks need uv.".into());
-        let here = host_pane(&no_uv, &crate::hosts::HostId::ThisMac, "this computer", Backend::Marimo);
-        assert_eq!(here["button"], if crate::new_session::OFFERS_OWN_UV { "uv-install" } else { "python-retry" });
-        let lab = host_pane(&no_uv, &crate::hosts::HostId::Server("lab".into()), "lab", Backend::Marimo);
-        assert_eq!(lab["button"], "python-retry");
-        assert!(host_pane(&HostPane::Starting, &crate::hosts::HostId::ThisMac, "this computer", Backend::Marimo)["button"].is_null());
+        let lab = crate::hosts::HostId::Server("lab".into());
+        assert_eq!(host_pane(&no_uv, &lab, true, "lab", Backend::Marimo)["button"], "uv-install");
+        assert_eq!(host_pane(&no_uv, &lab, false, "lab", Backend::Marimo)["button"], "python-retry");
+        assert!(host_pane(&HostPane::Starting, &lab, true, "lab", Backend::Marimo)["button"].is_null());
     }
 }

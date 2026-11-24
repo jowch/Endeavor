@@ -434,6 +434,9 @@ These are read by debug builds only.
   `<file>.done`. It lets a check run on a computer where nothing can click.
   - `open <notebook path>` starts a session on this computer in the
     notebook's folder, on that notebook, which opens in safe preview.
+  - `new <kind> <folder>` starts a session on a new notebook (`pluto`, `ember`
+    or `marimo`) in that folder on this computer; `new <kind> on <server id>
+    <folder>` starts it on that server.
   - `run` is the callout's Run notebook.
   - `settings` and `close settings` open and close Settings.
   - `js <script>` runs the script in the notebook page the user sees, and
