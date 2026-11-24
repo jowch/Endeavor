@@ -2003,6 +2003,10 @@ impl Workspace {
             Some(annotate::Message::RunNotebook { notebook }) => self.run_notebook(notebook, cx),
             Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),
             Some(annotate::Message::AnswerCard { notebook, card }) => self.answer_card(notebook, card, cx),
+            Some(annotate::Message::Docs(open)) => {
+                self.page.drawer = open.then(|| "docs".to_owned());
+                cx.notify();
+            }
             Some(annotate::Message::AskedVisible(visible)) => {
                 if let Some(key) = self.active {
                     self.with_session(key, cx, |s| s.asks.cells_visible = Some(visible));

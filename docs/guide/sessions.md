@@ -111,7 +111,8 @@ The header above the notebook shows:
   something needs your attention;
 - **Status**, which shows what Julia is doing, such as installing packages,
   and the log behind it;
-- **Live docs**, which shows help for the Julia function under the cursor;
+- **Live docs**, which shows help for the function under the cursor (in a
+  Python notebook, it's marimo's own documentation panel);
 - the **⋮** menu, which includes **Copy path**, **Reveal in Finder**,
   **Rename…**, **Move to…**, the notebook look, **Keyboard shortcuts**,
   **Open in a new session…**, and **Restart notebook** and **Stop

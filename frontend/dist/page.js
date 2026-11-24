@@ -1929,10 +1929,10 @@ ${text.value}` : sent.comment;
         entry = { compartment: new cm.Compartment(), shown: before };
         installed.set(view, entry);
         const { compartment } = entry;
-        const follow2 = cm.extender.of(
+        const follow3 = cm.extender.of(
           (tr) => tr.docChanged && befores.has(id) ? { effects: compartment.reconfigure(extension(tr.newDoc, befores.get(id))) } : null
         );
-        view.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow2]) });
+        view.dispatch({ effects: cm.appendConfig.of([compartment.of(extension(view.state.doc, before)), follow3]) });
       } else if (entry.shown !== before) {
         entry.shown = before;
         view.dispatch({ effects: entry.compartment.reconfigure(extension(view.state.doc, before)) });
@@ -2218,12 +2218,12 @@ ${text.value}` : sent.comment;
     window.WebSocket = Held;
   }
   function style() {
-    const css16 = document.createElement("style");
-    css16.textContent = `
+    const css17 = document.createElement("style");
+    css17.textContent = `
     body.${CLASS} pluto-notebook { opacity: 0.85; }
     body.${CLASS} pluto-notebook, body.${CLASS} pluto-notebook * { pointer-events: none !important; }
   `;
-    document.head.append(css16);
+    document.head.append(css17);
   }
   function blockKeys(e) {
     if (!readonly) return;
@@ -3068,6 +3068,57 @@ footer form#feedback { display: none !important; }
     new MutationObserver(() => dismissResumedBanners(document)).observe(document.body, { childList: true, subtree: true });
   }
 
+  // src/marimodocs.ts
+  var DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
+  var PANEL = "[data-testid=helper]";
+  var TRIES = 4;
+  var SETTLE_MS = 1200;
+  var POLL_MS = 50;
+  var css16 = `
+  html[data-endeavor-drawer="docs"] ${PANEL} {
+    position: fixed !important; left: 0; right: 0; bottom: 0; top: auto; width: auto !important;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
+    border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
+  html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
+  html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
+    padding-bottom: var(--endeavor-drawer-h, 42vh); }
+  @media print { html[data-endeavor-drawer="docs"] ${PANEL} { display: none !important; } }
+`;
+  function showsDocs(panelSize, title) {
+    return Number(panelSize) > 0 && title.trim().toLowerCase() === "documentation";
+  }
+  function docsShown() {
+    const panel = document.querySelector(PANEL);
+    return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
+  }
+  async function setDocs(want, shown2, press, wait, tries = TRIES) {
+    for (let i = 0; i < tries && shown2() !== want; i++) {
+      press();
+      for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
+    }
+    return shown2() === want;
+  }
+  var reported = null;
+  function follow2() {
+    const open3 = docsShown();
+    if (open3) document.documentElement.dataset.endeavorDrawer = "docs";
+    else if (document.documentElement.dataset.endeavorDrawer === "docs") delete document.documentElement.dataset.endeavorDrawer;
+    if (open3 === reported) return;
+    reported = open3;
+    send({ type: "docs", open: open3 });
+  }
+  function initMarimoDocs() {
+    const style2 = document.createElement("style");
+    style2.textContent = css16;
+    document.head.append(style2);
+    document.documentElement.style.setProperty("--endeavor-drawer-h", `${Math.round(window.innerHeight * 0.42)}px`);
+    const press = () => document.querySelector(DOCS_OPTION)?.click();
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    on("drawer", (msg) => void setDocs(msg.tab === "docs", docsShown, press, wait).then(follow2));
+    new MutationObserver(follow2).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size"], childList: true, subtree: true, characterData: true });
+    follow2();
+  }
+
   // src/main.ts
   function initOnMarimo() {
     initState();
@@ -3076,6 +3127,7 @@ footer form#feedback { display: none !important; }
     initAskBox();
     initAnnotate();
     initDismissResumedBanner();
+    initMarimoDocs();
     initDebug();
     send({ type: "ready" });
   }

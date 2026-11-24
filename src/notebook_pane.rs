@@ -189,6 +189,21 @@ impl NotebookAction {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum HeaderTool {
+    Share,
+    Docs,
+    Status,
+}
+
+pub fn header_tools(kind: Backend, endeavor_look: bool) -> &'static [HeaderTool] {
+    match kind {
+        Backend::Marimo => &[HeaderTool::Share, HeaderTool::Docs],
+        Backend::Pluto | Backend::Ember if endeavor_look => &[HeaderTool::Share, HeaderTool::Docs, HeaderTool::Status],
+        Backend::Pluto | Backend::Ember => &[],
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum ExportFrom {
     Page(String),
     Runtime(&'static str),
@@ -700,8 +715,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_annotation(&crate::ToggleAnnotation, window, cx)))
             .when(point_tip, |d| d.child(self.render_point_tip(if endeavor { 120. } else { 32. }, session.agent, cx)));
         let drawer = page.and_then(|p| p.drawer.clone());
-        let drawer_in_page = session.kind != Backend::Marimo;
-        let share = (shown && (endeavor || !drawer_in_page)).then(|| {
+        let tools = if shown { header_tools(session.kind, endeavor) } else { &[] };
+        let share = tools.contains(&HeaderTool::Share).then(|| {
             let share_menu = self.menu.as_ref().filter(|m| m.target == MenuTarget::Share(key));
             header_button("header-share", Glyph::Share, Some("Share and export"), open(MenuTarget::Share(key)), compact)
                 .when(share_menu.is_none(), |d| d.tooltip(tooltip("Share and export", &self.webview)))
@@ -712,15 +727,15 @@ impl Workspace {
                 .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                 .into_any_element()
         });
-        let drawers = (shown && endeavor && drawer_in_page).then(|| {
-            [
-                tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
-                    .into_any_element(),
-                tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
-                    .into_any_element(),
-            ]
+        let docs = tools.contains(&HeaderTool::Docs).then(|| {
+            tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
+                .into_any_element()
+        });
+        let status = tools.contains(&HeaderTool::Status).then(|| {
+            tip(header_button("header-status", Glyph::Pulse, Some("Status"), drawer.as_deref() == Some("status"), compact), "Status".into())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("status", cx)))
+                .into_any_element()
         });
 
         div()
@@ -738,7 +753,8 @@ impl Workspace {
             .children(busy)
             .when(shown, |d| d.child(point))
             .children(share)
-            .children(drawers.into_iter().flatten())
+            .children(docs)
+            .children(status)
             .when(session.notebook_path.is_some(), |d| d.child(self.notebook_more(key, cx)))
             .into_any_element()
     }
@@ -1679,5 +1695,15 @@ mod tests {
         assert_eq!(export_from(Backend::Marimo, "notebookexport", "n1"), ExportFrom::Runtime("html"));
         assert_eq!(export_from(Backend::Marimo, "notebookfile", "n1"), ExportFrom::Runtime("file"));
         assert_eq!(Backend::ALL.map(notebook_extension), ["jl", "R", "py"]);
+    }
+
+    #[test]
+    fn python_notebooks_get_share_and_live_docs_whatever_the_look_and_no_status() {
+        use super::{HeaderTool::*, header_tools};
+        assert_eq!(header_tools(Backend::Pluto, true), [Share, Docs, Status]);
+        assert_eq!(header_tools(Backend::Ember, true), [Share, Docs, Status]);
+        assert!(header_tools(Backend::Pluto, false).is_empty(), "the classic look keeps Pluto's own buttons");
+        assert_eq!(header_tools(Backend::Marimo, true), [Share, Docs]);
+        assert_eq!(header_tools(Backend::Marimo, false), [Share, Docs], "marimo has no look of ours to switch off");
     }
 }
