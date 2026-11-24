@@ -2109,7 +2109,7 @@ fn is_python_failure(error: &str) -> bool {
 }
 
 fn uv_offered(host: &HostId, error: &str) -> bool {
-    crate::new_session::SHOWS_PYTHON && *host == HostId::ThisMac && error.starts_with("python_not_found::")
+    crate::new_session::OFFERS_OWN_UV && *host == HostId::ThisMac && error.starts_with("python_not_found::")
 }
 
 pub fn own_r_offered() -> Option<wire::Item> {
@@ -2500,7 +2500,7 @@ mod tests {
         assert_eq!(pane_failure(Backend::Marimo, "open_stuck::It's still opening.").as_deref(), Some("python_failed::It's still opening."));
         assert_eq!(pane_failure(Backend::Marimo, "r_failed::R stopped while starting"), None);
         assert!(super::is_python_failure(no_uv) && !super::is_python_failure("r_not_found::No R here"));
-        assert_eq!(super::uv_offered(&crate::hosts::HostId::ThisMac, no_uv), crate::new_session::SHOWS_PYTHON);
+        assert_eq!(super::uv_offered(&crate::hosts::HostId::ThisMac, no_uv), crate::new_session::OFFERS_OWN_UV);
         assert!(!super::uv_offered(&crate::hosts::HostId::ThisMac, "python_failed::marimo stopped"));
     }
 

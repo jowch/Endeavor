@@ -45,10 +45,10 @@ pub fn new_kinds(host: &HostId) -> &'static [Backend] {
     }
 }
 
-pub const SHOWS_PYTHON: bool = cfg!(not(windows));
+pub const OFFERS_OWN_UV: bool = cfg!(not(windows));
 
 pub fn shows_python(host: &HostId) -> bool {
-    SHOWS_PYTHON && *host == HostId::ThisMac
+    *host == HostId::ThisMac
 }
 
 pub fn kind_of_path(path: &str) -> Backend {
