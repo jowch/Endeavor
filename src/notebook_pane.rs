@@ -30,6 +30,7 @@ pub enum NotebookAction {
     LookEndeavor,
     LookClassic,
     LookEmber,
+    LookMarimo,
     Shortcuts,
     NewSession,
     Feedback,
@@ -54,6 +55,7 @@ impl NotebookAction {
             NotebookAction::LookEndeavor => "Endeavor",
             NotebookAction::LookClassic => "Pluto classic",
             NotebookAction::LookEmber => "Ember classic",
+            NotebookAction::LookMarimo => "marimo classic",
             NotebookAction::Shortcuts => "Keyboard shortcuts",
             NotebookAction::NewSession => "Open in a new session…",
             NotebookAction::Feedback => "Send feedback to Pluto's developers…",
@@ -76,7 +78,7 @@ impl NotebookAction {
             NotebookAction::Rename => ("r", "R"),
             NotebookAction::MoveTo => ("m", "M"),
             NotebookAction::LookEndeavor => ("e", "E"),
-            NotebookAction::LookClassic | NotebookAction::LookEmber => ("p", "P"),
+            NotebookAction::LookClassic | NotebookAction::LookEmber | NotebookAction::LookMarimo => ("p", "P"),
             NotebookAction::Shortcuts => ("f1", "F1"),
             NotebookAction::NewSession => ("n", "N"),
             NotebookAction::Feedback => ("b", ""),
@@ -110,7 +112,7 @@ impl NotebookAction {
             NotebookAction::Present => Glyph::Screen,
             NotebookAction::Record => Glyph::Record,
             NotebookAction::Frontmatter => Glyph::Tag,
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => return None,
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber | NotebookAction::LookMarimo => return None,
         })
     }
 
@@ -127,7 +129,7 @@ impl NotebookAction {
     pub fn group(self) -> u8 {
         match self {
             NotebookAction::CopyPath | NotebookAction::Reveal | NotebookAction::Rename | NotebookAction::MoveTo => 0,
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => 1,
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber | NotebookAction::LookMarimo => 1,
             NotebookAction::Shortcuts => 2,
             NotebookAction::NewSession | NotebookAction::Feedback => 3,
             NotebookAction::Start | NotebookAction::Restart | NotebookAction::Stop => 4,
@@ -163,7 +165,7 @@ impl NotebookAction {
         items.extend(match kind {
             Backend::Pluto => [LookEndeavor, LookClassic, Shortcuts, NewSession, Feedback].as_slice(),
             Backend::Ember => [LookEndeavor, LookEmber, Shortcuts, NewSession].as_slice(),
-            Backend::Marimo => [Shortcuts, NewSession].as_slice(),
+            Backend::Marimo => [LookEndeavor, LookMarimo, Shortcuts, NewSession].as_slice(),
         });
         if stopped {
             items.push(Start);
@@ -1035,7 +1037,7 @@ impl Workspace {
             NotebookAction::Reveal => platform::reveal(Path::new(&path)),
             NotebookAction::Rename => self.start_notebook_rename(key, window, cx),
             NotebookAction::MoveTo => self.move_notebook_to(key, cx),
-            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber => {
+            NotebookAction::LookEndeavor | NotebookAction::LookClassic | NotebookAction::LookEmber | NotebookAction::LookMarimo => {
                 let look = if action == NotebookAction::LookEndeavor { NotebookTheme::Endeavor } else { NotebookTheme::Pluto };
                 self.update_settings(cx, |s| s.notebook_theme = look);
                 self.apply_look(cx);
@@ -1808,6 +1810,7 @@ mod tests {
         );
         assert!(Stop.danger() && !Restart.danger() && !Start.danger());
         assert_eq!(NotebookAction::for_notebook(Backend::Ember, true, false, false, true), [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookEmber, Shortcuts, NewSession, Restart, Stop]);
+        assert_eq!(NotebookAction::for_notebook(Backend::Marimo, true, false, false, true), [CopyPath, Reveal, Rename, MoveTo, LookEndeavor, LookMarimo, Shortcuts, NewSession, Restart, Stop]);
         assert_eq!(NotebookAction::for_share(Backend::Ember, false), [ExportFile, ExportHtml, ExportPdf]);
         assert_eq!(NotebookAction::for_share(Backend::Marimo, true), [ExportFile, ExportHtml, ExportPdf]);
         assert_eq!(NotebookAction::for_share(Backend::Marimo, false), [ExportPdf], "an older runtime has no export call, and printing needs none");

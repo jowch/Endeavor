@@ -10,8 +10,8 @@ const SIDE_FROM = 1300;
 
 const css = `
   #endeavor-drawer { display: none; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] #endeavor-drawer { display: flex; }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex;
     left: var(--endeavor-docs-left, 0px); bottom: var(--endeavor-docs-bottom, 0px); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
