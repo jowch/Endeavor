@@ -111,8 +111,21 @@ function height(): number {
   return Math.round(window.innerHeight * 0.42);
 }
 
+let cap = (): number => Infinity;
+let dragging = false;
+
+export function capDrawer(tallest: () => number): void {
+  cap = tallest;
+}
+
+export function refitDrawer(): void {
+  if (dragging) return;
+  const fitted = Math.max(120, Math.min(height(), window.innerHeight - 80, cap()));
+  if (document.documentElement.style.getPropertyValue("--endeavor-drawer-h") !== `${fitted}px`) setHeight(fitted);
+}
+
 function setHeight(h: number, settle = true) {
-  const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
+  const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
   const root = document.documentElement.style;
   root.setProperty("--endeavor-drawer-h", `${clamped}px`);
   if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
@@ -124,6 +137,7 @@ export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | n
     const resized = resizing();
     if (!resized) return;
     grip.setPointerCapture(e.pointerId);
+    dragging = true;
     const below = window.innerHeight - resized.getBoundingClientRect().bottom;
     let pending: number | null = null;
     let frame = 0;
@@ -137,6 +151,7 @@ export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | n
     };
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
     const end = () => {
+      dragging = false;
       grip.removeEventListener("pointermove", move);
       for (const type of ends) grip.removeEventListener(type, end);
       if (frame) cancelAnimationFrame(frame);

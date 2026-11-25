@@ -1,9 +1,13 @@
 import { on, send } from "./bridge";
-import { drawerTab, openDrawer, resizesDrawer } from "./drawer";
+import { capDrawer, drawerTab, openDrawer, refitDrawer, resizesDrawer } from "./drawer";
 
 const DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
 const PANEL = "[data-testid=helper]";
 const ICON_COLUMN = "[data-testid=chrome-sidebar]";
+const TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
+const BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
+const BUTTONS_GAP = 12;
+const BOTTOM_BUTTONS_INSET = 20;
 const TRIES = 4;
 const SETTLE_MS = 1200;
 const MOUNT_MS = 15000;
@@ -58,6 +62,17 @@ export function besideIconColumn(): { left: number; bottom: number } {
   return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
 }
 
+export function tallestBelowButtons(innerHeight: number, footer: number, topButtonsBottom: number, bottomButtonsHeight: number): number {
+  return innerHeight - footer - (topButtonsBottom + BUTTONS_GAP + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+}
+
+function tallestDrawer(): number {
+  const top = document.querySelector(TOP_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+  const bottom = document.querySelector(BOTTOM_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+  if (!top || !bottom) return Infinity;
+  return tallestBelowButtons(window.innerHeight, besideIconColumn().bottom, top.bottom, bottom.height);
+}
+
 export function sidebarDragging(): boolean {
   return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
 }
@@ -74,6 +89,7 @@ function follow() {
   const root = document.documentElement.style;
   if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
   if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+  if (drawerTab()) refitDrawer();
   const open = docsShown();
   if (open && drawerTab() !== "docs") openDrawer("docs");
   else if (!open && drawerTab() === "docs") openDrawer(null);
@@ -95,6 +111,7 @@ export function initMarimoDocs(): void {
   style.textContent = css;
   document.head.append(style);
   addGrip();
+  capDrawer(tallestDrawer);
   const press = () => {
     const option = document.querySelector<HTMLElement>(DOCS_OPTION);
     option?.click();

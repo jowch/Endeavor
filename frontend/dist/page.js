@@ -1569,25 +1569,25 @@ ${text.value}` : sent2.comment;
     s.scrollTo({ top: y / height2 * s.scrollHeight - frame2(s).height / 2, behavior: smooth ? "smooth" : "auto" });
   }
   function wire() {
-    let dragging = false;
+    let dragging2 = false;
     let downY = 0;
     const y = (e) => e.clientY - rail.getBoundingClientRect().top;
     rail.addEventListener("pointerdown", (e) => {
-      dragging = true;
+      dragging2 = true;
       downY = y(e);
       rail.setPointerCapture?.(e.pointerId);
     });
     rail.addEventListener("pointermove", (e) => {
-      if (dragging && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
+      if (dragging2 && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
       showTip(markAt(y(e)));
     });
     for (const end of ["pointerup", "pointercancel", "lostpointercapture"]) {
       rail.addEventListener(end, () => {
-        dragging = false;
+        dragging2 = false;
       });
     }
     rail.addEventListener("pointerleave", () => {
-      if (!dragging) showTip(null);
+      if (!dragging2) showTip(null);
     });
     rail.addEventListener("click", (e) => {
       e.preventDefault();
@@ -2288,8 +2288,18 @@ ${text.value}` : sent2.comment;
     }
     return Math.round(window.innerHeight * 0.42);
   }
+  var cap = () => Infinity;
+  var dragging = false;
+  function capDrawer(tallest) {
+    cap = tallest;
+  }
+  function refitDrawer() {
+    if (dragging) return;
+    const fitted = Math.max(120, Math.min(height(), window.innerHeight - 80, cap()));
+    if (document.documentElement.style.getPropertyValue("--endeavor-drawer-h") !== `${fitted}px`) setHeight(fitted);
+  }
   function setHeight(h, settle = true) {
-    const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
+    const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
     const root = document.documentElement.style;
     root.setProperty("--endeavor-drawer-h", `${clamped}px`);
     if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
@@ -2300,6 +2310,7 @@ ${text.value}` : sent2.comment;
       const resized = resizing();
       if (!resized) return;
       grip.setPointerCapture(e.pointerId);
+      dragging = true;
       const below = window.innerHeight - resized.getBoundingClientRect().bottom;
       let pending2 = null;
       let frame3 = 0;
@@ -2313,6 +2324,7 @@ ${text.value}` : sent2.comment;
       };
       const ends = ["pointerup", "pointercancel", "lostpointercapture"];
       const end = () => {
+        dragging = false;
         grip.removeEventListener("pointermove", move);
         for (const type of ends) grip.removeEventListener(type, end);
         if (frame3) cancelAnimationFrame(frame3);
@@ -3329,6 +3341,10 @@ footer form#feedback { display: none !important; }
   var DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
   var PANEL = "[data-testid=helper]";
   var ICON_COLUMN = "[data-testid=chrome-sidebar]";
+  var TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
+  var BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
+  var BUTTONS_GAP = 12;
+  var BOTTOM_BUTTONS_INSET = 20;
   var TRIES = 4;
   var SETTLE_MS = 1200;
   var MOUNT_MS = 15e3;
@@ -3376,6 +3392,15 @@ footer form#feedback { display: none !important; }
     if (!column) return { left: 0, bottom: 0 };
     return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
   }
+  function tallestBelowButtons(innerHeight, footer, topButtonsBottom, bottomButtonsHeight) {
+    return innerHeight - footer - (topButtonsBottom + BUTTONS_GAP + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+  }
+  function tallestDrawer() {
+    const top = document.querySelector(TOP_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+    const bottom = document.querySelector(BOTTOM_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+    if (!top || !bottom) return Infinity;
+    return tallestBelowButtons(window.innerHeight, besideIconColumn().bottom, top.bottom, bottom.height);
+  }
   function sidebarDragging() {
     return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
   }
@@ -3390,6 +3415,7 @@ footer form#feedback { display: none !important; }
     const root = document.documentElement.style;
     if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
     if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+    if (drawerTab()) refitDrawer();
     const open3 = docsShown();
     if (open3 && drawerTab() !== "docs") openDrawer("docs");
     else if (!open3 && drawerTab() === "docs") openDrawer(null);
@@ -3409,6 +3435,7 @@ footer form#feedback { display: none !important; }
     style2.textContent = css16;
     document.head.append(style2);
     addGrip();
+    capDrawer(tallestDrawer);
     const press = () => {
       const option = document.querySelector(DOCS_OPTION);
       option?.click();

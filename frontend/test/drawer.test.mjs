@@ -301,3 +301,34 @@ test("marimo's docs panel has the drawer's grip, and a drag sets the height both
     assert.equal(root.getPropertyValue("--endeavor-drawer-h"), `${p.window.innerHeight - 30 - 350}px`, `a move after ${ending} changes nothing`);
   }
 });
+
+test("on marimo a drawer can't grow over marimo's floating buttons: it stops below the top ones, with room for the column at the bottom right", async () => {
+  const p = await marimoPage();
+  const { document } = p.window;
+  const placed = (html, rect) => {
+    const holder = document.createElement("div");
+    holder.className = "absolute";
+    holder.innerHTML = html;
+    holder.getBoundingClientRect = () => rect;
+    document.body.append(holder);
+  };
+  placed('<button data-testid="notebook-menu-dropdown"></button>', { top: 11, bottom: 38, height: 27 });
+  placed('<button data-testid="command-palette-button"></button>', { top: 599, bottom: 803, height: 204 });
+  const panel = document.createElement("div");
+  panel.dataset.testid = "helper";
+  panel.getBoundingClientRect = () => ({ top: 400, bottom: p.window.innerHeight, left: 48, right: 1000 });
+  document.body.append(panel);
+  const grip = document.querySelector("#endeavor-docs-grip");
+  grip.setPointerCapture = () => {};
+  const pointer = (type, clientY) => grip.dispatchEvent(new p.window.MouseEvent(type, { clientY, bubbles: true }));
+  pointer("pointerdown", 400);
+  pointer("pointermove", 20);
+  pointer("pointerup", 20);
+  const tallest = p.window.innerHeight - (38 + 12 + 204 + 20);
+  assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`);
+
+  p.window.localStorage.setItem("endeavor-drawer-h", "700");
+  p.window.__endeavor.receive({ type: "drawer", tab: "packages" });
+  await p.settle();
+  assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`, "a taller saved height is fitted when a drawer opens");
+});
