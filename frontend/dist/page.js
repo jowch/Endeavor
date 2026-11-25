@@ -2189,6 +2189,7 @@ ${text.value}` : sent2.comment;
   var HEADER = 36;
   var SIDE_WIDTH = 500;
   var SIDE_FROM = 1300;
+  var UNDER_MARIMO_POPOVERS = 40;
   var css12 = `
   #endeavor-drawer { display: none; }
   html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] #endeavor-drawer { display: flex; }
@@ -2200,6 +2201,7 @@ ${text.value}` : sent2.comment;
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
+  html[data-endeavor-engine="marimo"] #endeavor-drawer { z-index: ${UNDER_MARIMO_POPOVERS}; }
   #endeavor-drawer .grip { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: ns-resize; }
   #endeavor-drawer .grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }
@@ -3365,13 +3367,13 @@ footer form#feedback { display: none !important; }
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: ${UNDER_MARIMO_POPOVERS};
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
     padding-bottom: var(--endeavor-drawer-pad, 42vh); }
   #endeavor-docs-grip { display: none; }
-  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: ${UNDER_MARIMO_POPOVERS + 1}; height: 8px; cursor: ns-resize;
     left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
   #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }
@@ -3495,13 +3497,14 @@ ${LOOK} body.light {
   --secondary: #F4F4F6; --secondary-foreground: #1B1B1F;
   --accent: #EEEEF1; --accent-foreground: #1B1B1F;
   --border: #E1E1E6; --input: #8A8A92; --ring: #CC3F00;
-  --cm-background: #FFFFFF;
+  --cm-background: #F4F4F6;
 }
 ${LOOK} #App { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); --content-width: 731px; }
 ${LOOK} #App > div.sticky:has([data-testid=dir-completion-input]) { display: none !important; }
 ${LOOK} #App > div:has(> .m-auto [data-testid=cell-column]) { padding: 48px 0 0 !important; }
 ${LOOK} #App .m-auto:has(> div > [data-testid=cell-column]) { margin-left: var(--e-side) !important; margin-right: auto !important; }
 ${LOOK} [data-testid=shutdown-button] { display: none !important; }
+${LOOK} .marimo-cell :is(.cm-editor, .cm-gutters) { background-color: var(--cm-background) !important; }
 `;
   function initMarimoLook() {
     const style2 = document.createElement("style");

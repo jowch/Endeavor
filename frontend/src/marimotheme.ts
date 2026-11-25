@@ -27,13 +27,14 @@ ${LOOK} body.light {
   --secondary: #F4F4F6; --secondary-foreground: #1B1B1F;
   --accent: #EEEEF1; --accent-foreground: #1B1B1F;
   --border: #E1E1E6; --input: #8A8A92; --ring: #CC3F00;
-  --cm-background: #FFFFFF;
+  --cm-background: #F4F4F6;
 }
 ${LOOK} #App { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); --content-width: 731px; }
 ${LOOK} #App > div.sticky:has([data-testid=dir-completion-input]) { display: none !important; }
 ${LOOK} #App > div:has(> .m-auto [data-testid=cell-column]) { padding: 48px 0 0 !important; }
 ${LOOK} #App .m-auto:has(> div > [data-testid=cell-column]) { margin-left: var(--e-side) !important; margin-right: auto !important; }
 ${LOOK} [data-testid=shutdown-button] { display: none !important; }
+${LOOK} .marimo-cell :is(.cm-editor, .cm-gutters) { background-color: var(--cm-background) !important; }
 `;
 
 export function initMarimoLook(): void {

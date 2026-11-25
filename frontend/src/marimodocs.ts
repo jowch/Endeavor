@@ -1,5 +1,5 @@
 import { on, send } from "./bridge";
-import { capDrawer, drawerTab, openDrawer, refitDrawer, resizesDrawer } from "./drawer";
+import { capDrawer, drawerTab, openDrawer, refitDrawer, resizesDrawer, UNDER_MARIMO_POPOVERS } from "./drawer";
 
 const DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
 const PANEL = "[data-testid=helper]";
@@ -16,13 +16,13 @@ const POLL_MS = 50;
 const css = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: ${UNDER_MARIMO_POPOVERS};
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
     padding-bottom: var(--endeavor-drawer-pad, 42vh); }
   #endeavor-docs-grip { display: none; }
-  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: ${UNDER_MARIMO_POPOVERS + 1}; height: 8px; cursor: ns-resize;
     left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
   #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }

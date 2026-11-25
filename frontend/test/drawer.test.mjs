@@ -347,3 +347,11 @@ test("a Python notebook takes Endeavor's look from the app's look switch, and ma
   p.window.__endeavor.receive({ type: "theme", name: "pluto" });
   assert.equal(document.documentElement.dataset.endeavorLook, "pluto");
 });
+
+test("on marimo the Packages drawer sits under marimo's menus and popovers, as marimo's own docs panel does", async () => {
+  const p = await marimoPage();
+  p.window.__endeavor.receive({ type: "drawer", tab: "packages" });
+  await p.settle();
+  const z = Number(p.window.getComputedStyle(p.window.document.getElementById("endeavor-drawer")).zIndex);
+  assert.ok(z > 0 && z < 50, `z-index ${z} is under marimo's popovers (z-50)`);
+});
