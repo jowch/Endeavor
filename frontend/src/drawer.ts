@@ -111,12 +111,72 @@ function height(): number {
   return Math.round(window.innerHeight * 0.42);
 }
 
+let cap = (): number => Infinity;
+let dragging = false;
+
+export function capDrawer(tallest: () => number): void {
+  cap = tallest;
+}
+
+export function refitDrawer(): void {
+  if (dragging) return;
+  const fitted = Math.max(120, Math.min(height(), window.innerHeight - 80, cap()));
+  if (document.documentElement.style.getPropertyValue("--endeavor-drawer-h") !== `${fitted}px`) setHeight(fitted);
+}
+
 function setHeight(h: number, settle = true) {
-  const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
+  const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
   const root = document.documentElement.style;
   root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-  if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+  if (settle) {
+    root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+    redrawRail();
+  }
   return clamped;
+}
+
+function selecting(allowed: boolean): void {
+  const root = document.documentElement.style;
+  for (const property of ["user-select", "-webkit-user-select"]) {
+    if (allowed) root.removeProperty(property);
+    else root.setProperty(property, "none");
+  }
+}
+
+export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | null): void {
+  grip.addEventListener("pointerdown", (e) => {
+    const resized = resizing();
+    if (!resized) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    dragging = true;
+    selecting(false);
+    const below = window.innerHeight - resized.getBoundingClientRect().bottom;
+    let pending: number | null = null;
+    let frame = 0;
+    const move = (m: PointerEvent) => {
+      pending = window.innerHeight - below - m.clientY;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (pending !== null) setHeight(pending, false);
+      });
+    };
+    const ends = ["pointerup", "pointercancel", "lostpointercapture"];
+    const end = () => {
+      dragging = false;
+      selecting(true);
+      grip.removeEventListener("pointermove", move);
+      for (const type of ends) grip.removeEventListener(type, end);
+      if (frame) cancelAnimationFrame(frame);
+      const h = setHeight(pending ?? resized.offsetHeight);
+      try {
+        localStorage.setItem("endeavor-drawer-h", String(h));
+      } catch {}
+    };
+    grip.addEventListener("pointermove", move);
+    for (const type of ends) grip.addEventListener(type, end);
+  });
 }
 
 export const drawerAtSide = (width: number) => width >= SIDE_FROM && !onMarimo();
@@ -262,30 +322,7 @@ export function initDrawer(): void {
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => pick(b.dataset.tab as Drawer);
   drawer.querySelector<HTMLElement>(".close")!.onclick = () => openDrawer(null);
 
-  const grip = drawer.querySelector<HTMLElement>(".grip")!;
-  grip.onpointerdown = (e) => {
-    grip.setPointerCapture(e.pointerId);
-    let pending: number | null = null;
-    let frame = 0;
-    const move = (m: PointerEvent) => {
-      pending = window.innerHeight - m.clientY;
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        if (pending !== null) setHeight(pending, false);
-      });
-    };
-    const up = () => {
-      grip.removeEventListener("pointermove", move);
-      if (frame) cancelAnimationFrame(frame);
-      const h = setHeight(pending ?? drawer.offsetHeight);
-      try {
-        localStorage.setItem("endeavor-drawer-h", String(h));
-      } catch {}
-    };
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", up, { once: true });
-  };
+  resizesDrawer(drawer.querySelector<HTMLElement>(".grip")!, () => drawer);
 
   window.addEventListener("open_bottom_right_panel", (e) => {
     if (!echoing && (e as CustomEvent).detail === "docs" && tab !== "docs") openDrawer("docs");
