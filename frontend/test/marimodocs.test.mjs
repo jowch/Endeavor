@@ -24,32 +24,40 @@ test("marimo's docs panel counts as shown only when it is open and it is the doc
   assert.equal(showsDocs(null, ""), false);
 });
 
-test("a dropped press is pressed again, and a slow one is waited for rather than undone", async () => {
+test("Live docs presses marimo's toggle once and waits for it, so a slow panel is never closed by a second press", async () => {
   const { setDocs } = await load();
   const wait = () => Promise.resolve();
   let shown = false;
   let presses = 0;
-  const dropsFirst = () => { presses++; if (presses > 1) shown = !shown; return true; };
-  assert.equal(await setDocs(true, () => shown, dropsFirst, wait), true);
-  assert.equal(presses, 2);
-
-  shown = false;
-  presses = 0;
   let polls = 0;
-  const slow = () => { presses++; return true; };
-  const shownLate = () => { polls++; if (presses && polls > 5) shown = true; return shown; };
-  assert.equal(await setDocs(true, shownLate, slow, wait), true);
+  const press = () => { presses++; return true; };
+  const shownLate = () => { polls++; if (presses && polls > 60) shown = true; return shown; };
+  assert.equal(await setDocs(true, shownLate, press, wait), true);
   assert.equal(presses, 1, "one press, waited out");
 
   presses = 0;
-  const pressed = () => { presses++; return true; };
-  assert.equal(await setDocs(true, () => true, pressed, wait), true);
+  assert.equal(await setDocs(true, () => true, press, wait), true);
   assert.equal(presses, 0, "already open: nothing to press");
-  assert.equal(await setDocs(true, () => false, pressed, wait), false, "gives up after a few tries");
-  assert.equal(presses, 4);
+  assert.equal(await setDocs(false, () => false, press, wait), true);
+  assert.equal(presses, 0, "already shut: nothing to press");
+  assert.equal(await setDocs(true, () => false, press, wait), false, "a press that never shows gives up without pressing again");
+  assert.equal(presses, 1);
 });
 
-test("a press asked for before marimo's sidebar is on the page waits for it rather than using up its tries", async () => {
+test("a press on marimo's docs item is a mouse press, not a bare click, which marimo's sidebar takes as the start of a drag", async () => {
+  const { window } = new JSDOM(`<body><div role="option"></div></body>`, { runScripts: "outside-only" });
+  window.PointerEvent ??= class extends window.MouseEvent {
+    constructor(type, init = {}) { super(type, init); this.pointerType = init.pointerType; }
+  };
+  const { pressLikeAMouse } = window.eval(`${outputFiles[0].text};docs`);
+  const option = window.document.querySelector("[role=option]");
+  const seen = [];
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) option.addEventListener(type, (e) => seen.push(`${type}:${e.pointerType ?? ""}:${e.detail}`));
+  pressLikeAMouse(option);
+  assert.deepEqual(seen, ["pointerdown:mouse:1", "mousedown::1", "pointerup:mouse:1", "mouseup::1", "click::1"]);
+});
+
+test("a press asked for before marimo's sidebar is on the page waits for the sidebar", async () => {
   const { setDocs } = await load();
   let mounted = 0;
   let shown = false;

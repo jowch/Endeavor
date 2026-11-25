@@ -3359,8 +3359,7 @@ footer form#feedback { display: none !important; }
   var CLEAR_OF_BUTTONS = 8;
   var RUN_STRIP_ROOM = 96;
   var BOTTOM_BUTTONS_INSET = 20;
-  var TRIES = 4;
-  var SETTLE_MS = 1200;
+  var SETTLE_MS = 5e3;
   var MOUNT_MS = 15e3;
   var POLL_MS = 50;
   var css16 = `
@@ -3385,19 +3384,22 @@ footer form#feedback { display: none !important; }
     const panel = document.querySelector(PANEL);
     return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
   }
-  async function setDocs(want, shown2, press, wait, tries = TRIES) {
-    const settle = async () => {
-      for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
-    };
+  async function setDocs(want, shown2, press, wait) {
     for (let waited = 0; shown2() !== want && !press(); waited += POLL_MS) {
       if (waited >= MOUNT_MS) return false;
       await wait(POLL_MS);
     }
-    for (let i = 1; i <= tries && shown2() !== want; i++) {
-      await settle();
-      if (shown2() !== want && i < tries) press();
-    }
+    for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
     return shown2() === want;
+  }
+  function pressLikeAMouse(target) {
+    const box2 = target.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, detail: 1, clientX: box2.x + box2.width / 2, clientY: box2.y + box2.height / 2, pointerId: 1, pointerType: "mouse", isPrimary: true };
+    target.dispatchEvent(new PointerEvent("pointerdown", { ...at, buttons: 1 }));
+    target.dispatchEvent(new MouseEvent("mousedown", { ...at, buttons: 1 }));
+    target.dispatchEvent(new PointerEvent("pointerup", at));
+    target.dispatchEvent(new MouseEvent("mouseup", at));
+    target.dispatchEvent(new MouseEvent("click", at));
   }
   var reported = null;
   var moving = 0;
@@ -3452,7 +3454,7 @@ footer form#feedback { display: none !important; }
     capDrawer(tallestDrawer);
     const press = () => {
       const option = document.querySelector(DOCS_OPTION);
-      option?.click();
+      if (option) pressLikeAMouse(option);
       return !!option;
     };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));

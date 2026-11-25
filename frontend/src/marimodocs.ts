@@ -9,8 +9,7 @@ const BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
 const CLEAR_OF_BUTTONS = 8;
 const RUN_STRIP_ROOM = 96;
 const BOTTOM_BUTTONS_INSET = 20;
-const TRIES = 4;
-const SETTLE_MS = 1200;
+const SETTLE_MS = 5000;
 const MOUNT_MS = 15000;
 const POLL_MS = 50;
 
@@ -39,19 +38,23 @@ function docsShown(): boolean {
   return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
 }
 
-export async function setDocs(want: boolean, shown: () => boolean, press: () => boolean, wait: (ms: number) => Promise<void>, tries = TRIES): Promise<boolean> {
-  const settle = async () => {
-    for (let waited = 0; waited < SETTLE_MS && shown() !== want; waited += POLL_MS) await wait(POLL_MS);
-  };
+export async function setDocs(want: boolean, shown: () => boolean, press: () => boolean, wait: (ms: number) => Promise<void>): Promise<boolean> {
   for (let waited = 0; shown() !== want && !press(); waited += POLL_MS) {
     if (waited >= MOUNT_MS) return false;
     await wait(POLL_MS);
   }
-  for (let i = 1; i <= tries && shown() !== want; i++) {
-    await settle();
-    if (shown() !== want && i < tries) press();
-  }
+  for (let waited = 0; waited < SETTLE_MS && shown() !== want; waited += POLL_MS) await wait(POLL_MS);
   return shown() === want;
+}
+
+export function pressLikeAMouse(target: HTMLElement): void {
+  const box = target.getBoundingClientRect();
+  const at = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, detail: 1, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, pointerId: 1, pointerType: "mouse", isPrimary: true };
+  target.dispatchEvent(new PointerEvent("pointerdown", { ...at, buttons: 1 }));
+  target.dispatchEvent(new MouseEvent("mousedown", { ...at, buttons: 1 }));
+  target.dispatchEvent(new PointerEvent("pointerup", at));
+  target.dispatchEvent(new MouseEvent("mouseup", at));
+  target.dispatchEvent(new MouseEvent("click", at));
 }
 
 let reported: boolean | null = null;
@@ -115,7 +118,7 @@ export function initMarimoDocs(): void {
   capDrawer(tallestDrawer);
   const press = () => {
     const option = document.querySelector<HTMLElement>(DOCS_OPTION);
-    option?.click();
+    if (option) pressLikeAMouse(option);
     return !!option;
   };
   const wait = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
