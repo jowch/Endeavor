@@ -47,7 +47,8 @@ You don't have to wait for Claude to finish:
 - Press Return to queue a message. It goes when the current reply ends.
 - Press ⌘Return to send it now, so Claude reads it in the middle of its
   current reply.
-- Press Esc to stop Claude.
+- Press Esc to stop Claude. A run in the notebook keeps going; to stop
+  it, use the notebook's Stop or ask Claude to stop it.
 
 Queued messages wait above the message box. You can edit, remove, or send
 each one early.

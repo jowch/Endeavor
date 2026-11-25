@@ -113,13 +113,6 @@ pub fn new_endings(last: &Endings, event: &serde_json::Value) -> (Vec<(String, S
     (new, ended.into_iter().map(|(path, _, _, at)| (path, at)).collect())
 }
 
-pub fn stop_session(bridge: &Bridge, owner: u64) -> Result<(), String> {
-    match app_call(bridge, "endeavor/stop_session", json!({ "owner": owner.to_string() })) {
-        Err(error) if error.starts_with("Method not found") => Ok(()),
-        reply => reply.map(|_| ()),
-    }
-}
-
 pub fn stop_notebook(bridge: &Bridge, path: &str) -> Result<Option<bool>, String> {
     let reply = rpc(bridge, "endeavor/stop_notebook", json!({ "path": path }))?;
     let result = &reply["result"];
