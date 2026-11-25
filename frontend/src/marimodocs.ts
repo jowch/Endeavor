@@ -6,7 +6,8 @@ const PANEL = "[data-testid=helper]";
 const ICON_COLUMN = "[data-testid=chrome-sidebar]";
 const TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
 const BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
-const BUTTONS_GAP = 12;
+const CLEAR_OF_BUTTONS = 8;
+const RUN_STRIP_ROOM = 96;
 const BOTTOM_BUTTONS_INSET = 20;
 const TRIES = 4;
 const SETTLE_MS = 1200;
@@ -63,7 +64,7 @@ export function besideIconColumn(): { left: number; bottom: number } {
 }
 
 export function tallestBelowButtons(innerHeight: number, footer: number, topButtonsBottom: number, bottomButtonsHeight: number): number {
-  return innerHeight - footer - (topButtonsBottom + BUTTONS_GAP + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+  return innerHeight - footer - (topButtonsBottom + CLEAR_OF_BUTTONS + RUN_STRIP_ROOM + CLEAR_OF_BUTTONS + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
 }
 
 function tallestDrawer(): number {

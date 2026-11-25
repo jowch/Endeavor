@@ -128,16 +128,29 @@ function setHeight(h: number, settle = true) {
   const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
   const root = document.documentElement.style;
   root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-  if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+  if (settle) {
+    root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+    redrawRail();
+  }
   return clamped;
+}
+
+function selecting(allowed: boolean): void {
+  const root = document.documentElement.style;
+  for (const property of ["user-select", "-webkit-user-select"]) {
+    if (allowed) root.removeProperty(property);
+    else root.setProperty(property, "none");
+  }
 }
 
 export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | null): void {
   grip.addEventListener("pointerdown", (e) => {
     const resized = resizing();
     if (!resized) return;
+    e.preventDefault();
     grip.setPointerCapture(e.pointerId);
     dragging = true;
+    selecting(false);
     const below = window.innerHeight - resized.getBoundingClientRect().bottom;
     let pending: number | null = null;
     let frame = 0;
@@ -152,6 +165,7 @@ export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | n
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
     const end = () => {
       dragging = false;
+      selecting(true);
       grip.removeEventListener("pointermove", move);
       for (const type of ends) grip.removeEventListener(type, end);
       if (frame) cancelAnimationFrame(frame);

@@ -2302,15 +2302,27 @@ ${text.value}` : sent2.comment;
     const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
     const root = document.documentElement.style;
     root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-    if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+    if (settle) {
+      root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+      redrawRail();
+    }
     return clamped;
+  }
+  function selecting(allowed) {
+    const root = document.documentElement.style;
+    for (const property of ["user-select", "-webkit-user-select"]) {
+      if (allowed) root.removeProperty(property);
+      else root.setProperty(property, "none");
+    }
   }
   function resizesDrawer(grip, resizing) {
     grip.addEventListener("pointerdown", (e) => {
       const resized = resizing();
       if (!resized) return;
+      e.preventDefault();
       grip.setPointerCapture(e.pointerId);
       dragging = true;
+      selecting(false);
       const below = window.innerHeight - resized.getBoundingClientRect().bottom;
       let pending2 = null;
       let frame3 = 0;
@@ -2325,6 +2337,7 @@ ${text.value}` : sent2.comment;
       const ends = ["pointerup", "pointercancel", "lostpointercapture"];
       const end = () => {
         dragging = false;
+        selecting(true);
         grip.removeEventListener("pointermove", move);
         for (const type of ends) grip.removeEventListener(type, end);
         if (frame3) cancelAnimationFrame(frame3);
@@ -3343,7 +3356,8 @@ footer form#feedback { display: none !important; }
   var ICON_COLUMN = "[data-testid=chrome-sidebar]";
   var TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
   var BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
-  var BUTTONS_GAP = 12;
+  var CLEAR_OF_BUTTONS = 8;
+  var RUN_STRIP_ROOM = 96;
   var BOTTOM_BUTTONS_INSET = 20;
   var TRIES = 4;
   var SETTLE_MS = 1200;
@@ -3393,7 +3407,7 @@ footer form#feedback { display: none !important; }
     return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
   }
   function tallestBelowButtons(innerHeight, footer, topButtonsBottom, bottomButtonsHeight) {
-    return innerHeight - footer - (topButtonsBottom + BUTTONS_GAP + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+    return innerHeight - footer - (topButtonsBottom + CLEAR_OF_BUTTONS + RUN_STRIP_ROOM + CLEAR_OF_BUTTONS + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
   }
   function tallestDrawer() {
     const top = document.querySelector(TOP_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();

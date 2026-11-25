@@ -285,7 +285,9 @@ test("marimo's docs panel has the drawer's grip, and a drag sets the height both
   const pointer = (type, clientY) => grip.dispatchEvent(new p.window.MouseEvent(type, { clientY, bubbles: true }));
   pointer("pointerdown", 500);
   pointer("pointermove", 400);
+  assert.equal(document.documentElement.style.getPropertyValue("user-select"), "none", "a drag selects no text in the notebook");
   pointer("pointerup", 400);
+  assert.equal(document.documentElement.style.getPropertyValue("user-select"), "", "text can be selected again after the drag");
   const root = document.documentElement.style;
   const expected = `${p.window.innerHeight - 30 - 400}px`;
   assert.equal(root.getPropertyValue("--endeavor-drawer-h"), expected);
@@ -324,7 +326,7 @@ test("on marimo a drawer can't grow over marimo's floating buttons: it stops bel
   pointer("pointerdown", 400);
   pointer("pointermove", 20);
   pointer("pointerup", 20);
-  const tallest = p.window.innerHeight - (38 + 12 + 204 + 20);
+  const tallest = p.window.innerHeight - (38 + 8 + 96 + 8 + 204 + 20);
   assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`);
 
   p.window.localStorage.setItem("endeavor-drawer-h", "700");
