@@ -135,8 +135,10 @@ export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | n
         if (pending !== null) setHeight(pending, false);
       });
     };
-    const up = () => {
+    const ends = ["pointerup", "pointercancel", "lostpointercapture"];
+    const end = () => {
       grip.removeEventListener("pointermove", move);
+      for (const type of ends) grip.removeEventListener(type, end);
       if (frame) cancelAnimationFrame(frame);
       const h = setHeight(pending ?? resized.offsetHeight);
       try {
@@ -144,7 +146,7 @@ export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | n
       } catch {}
     };
     grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", up, { once: true });
+    for (const type of ends) grip.addEventListener(type, end);
   });
 }
 

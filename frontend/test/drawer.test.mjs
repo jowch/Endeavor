@@ -291,4 +291,13 @@ test("marimo's docs panel has the drawer's grip, and a drag sets the height both
   assert.equal(root.getPropertyValue("--endeavor-drawer-h"), expected);
   assert.equal(root.getPropertyValue("--endeavor-drawer-pad"), expected);
   assert.equal(p.window.localStorage.getItem("endeavor-drawer-h"), String(p.window.innerHeight - 30 - 400));
+
+  for (const ending of ["pointercancel", "lostpointercapture"]) {
+    pointer("pointerdown", 400);
+    pointer("pointermove", 350);
+    pointer(ending, 350);
+    pointer("pointermove", 200);
+    pointer("pointerup", 200);
+    assert.equal(root.getPropertyValue("--endeavor-drawer-h"), `${p.window.innerHeight - 30 - 350}px`, `a move after ${ending} changes nothing`);
+  }
 });

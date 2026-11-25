@@ -2311,8 +2311,10 @@ ${text.value}` : sent2.comment;
           if (pending2 !== null) setHeight(pending2, false);
         });
       };
-      const up = () => {
+      const ends = ["pointerup", "pointercancel", "lostpointercapture"];
+      const end = () => {
         grip.removeEventListener("pointermove", move);
+        for (const type of ends) grip.removeEventListener(type, end);
         if (frame3) cancelAnimationFrame(frame3);
         const h = setHeight(pending2 ?? resized.offsetHeight);
         try {
@@ -2321,7 +2323,7 @@ ${text.value}` : sent2.comment;
         }
       };
       grip.addEventListener("pointermove", move);
-      grip.addEventListener("pointerup", up, { once: true });
+      for (const type of ends) grip.addEventListener(type, end);
     });
   }
   var drawerAtSide = (width) => width >= SIDE_FROM && !onMarimo();
