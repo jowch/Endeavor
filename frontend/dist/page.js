@@ -1569,25 +1569,25 @@ ${text.value}` : sent2.comment;
     s.scrollTo({ top: y / height2 * s.scrollHeight - frame2(s).height / 2, behavior: smooth ? "smooth" : "auto" });
   }
   function wire() {
-    let dragging = false;
+    let dragging2 = false;
     let downY = 0;
     const y = (e) => e.clientY - rail.getBoundingClientRect().top;
     rail.addEventListener("pointerdown", (e) => {
-      dragging = true;
+      dragging2 = true;
       downY = y(e);
       rail.setPointerCapture?.(e.pointerId);
     });
     rail.addEventListener("pointermove", (e) => {
-      if (dragging && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
+      if (dragging2 && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
       showTip(markAt(y(e)));
     });
     for (const end of ["pointerup", "pointercancel", "lostpointercapture"]) {
       rail.addEventListener(end, () => {
-        dragging = false;
+        dragging2 = false;
       });
     }
     rail.addEventListener("pointerleave", () => {
-      if (!dragging) showTip(null);
+      if (!dragging2) showTip(null);
     });
     rail.addEventListener("click", (e) => {
       e.preventDefault();
@@ -2288,12 +2288,68 @@ ${text.value}` : sent2.comment;
     }
     return Math.round(window.innerHeight * 0.42);
   }
+  var cap = () => Infinity;
+  var dragging = false;
+  function capDrawer(tallest) {
+    cap = tallest;
+  }
+  function refitDrawer() {
+    if (dragging) return;
+    const fitted = Math.max(120, Math.min(height(), window.innerHeight - 80, cap()));
+    if (document.documentElement.style.getPropertyValue("--endeavor-drawer-h") !== `${fitted}px`) setHeight(fitted);
+  }
   function setHeight(h, settle = true) {
-    const clamped = Math.max(120, Math.min(h, window.innerHeight - 80));
+    const clamped = Math.max(120, Math.min(h, window.innerHeight - 80, cap()));
     const root = document.documentElement.style;
     root.setProperty("--endeavor-drawer-h", `${clamped}px`);
-    if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+    if (settle) {
+      root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
+      redrawRail();
+    }
     return clamped;
+  }
+  function selecting(allowed) {
+    const root = document.documentElement.style;
+    for (const property of ["user-select", "-webkit-user-select"]) {
+      if (allowed) root.removeProperty(property);
+      else root.setProperty(property, "none");
+    }
+  }
+  function resizesDrawer(grip, resizing) {
+    grip.addEventListener("pointerdown", (e) => {
+      const resized = resizing();
+      if (!resized) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      dragging = true;
+      selecting(false);
+      const below = window.innerHeight - resized.getBoundingClientRect().bottom;
+      let pending2 = null;
+      let frame3 = 0;
+      const move = (m) => {
+        pending2 = window.innerHeight - below - m.clientY;
+        if (frame3) return;
+        frame3 = requestAnimationFrame(() => {
+          frame3 = 0;
+          if (pending2 !== null) setHeight(pending2, false);
+        });
+      };
+      const ends = ["pointerup", "pointercancel", "lostpointercapture"];
+      const end = () => {
+        dragging = false;
+        selecting(true);
+        grip.removeEventListener("pointermove", move);
+        for (const type of ends) grip.removeEventListener(type, end);
+        if (frame3) cancelAnimationFrame(frame3);
+        const h = setHeight(pending2 ?? resized.offsetHeight);
+        try {
+          localStorage.setItem("endeavor-drawer-h", String(h));
+        } catch {
+        }
+      };
+      grip.addEventListener("pointermove", move);
+      for (const type of ends) grip.addEventListener(type, end);
+    });
   }
   var drawerAtSide = (width) => width >= SIDE_FROM && !onMarimo();
   function placeSide() {
@@ -2411,31 +2467,7 @@ ${text.value}` : sent2.comment;
     document.body.append(drawer);
     for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => pick(b.dataset.tab);
     drawer.querySelector(".close").onclick = () => openDrawer(null);
-    const grip = drawer.querySelector(".grip");
-    grip.onpointerdown = (e) => {
-      grip.setPointerCapture(e.pointerId);
-      let pending2 = null;
-      let frame3 = 0;
-      const move = (m) => {
-        pending2 = window.innerHeight - m.clientY;
-        if (frame3) return;
-        frame3 = requestAnimationFrame(() => {
-          frame3 = 0;
-          if (pending2 !== null) setHeight(pending2, false);
-        });
-      };
-      const up = () => {
-        grip.removeEventListener("pointermove", move);
-        if (frame3) cancelAnimationFrame(frame3);
-        const h = setHeight(pending2 ?? drawer.offsetHeight);
-        try {
-          localStorage.setItem("endeavor-drawer-h", String(h));
-        } catch {
-        }
-      };
-      grip.addEventListener("pointermove", move);
-      grip.addEventListener("pointerup", up, { once: true });
-    };
+    resizesDrawer(drawer.querySelector(".grip"), () => drawer);
     window.addEventListener("open_bottom_right_panel", (e) => {
       if (!echoing && e.detail === "docs" && tab !== "docs") openDrawer("docs");
     });
@@ -3311,7 +3343,8 @@ footer form#feedback { display: none !important; }
   }
   function initDismissResumedBanner() {
     dismissResumedBanners(document);
-    const ours = (r) => r.target instanceof Element && !!r.target.closest("[data-endeavor-ui]");
+    const isOurs = (n) => n instanceof Element && !!n.closest("[data-endeavor-ui]");
+    const ours = (r) => isOurs(r.target) || [...r.addedNodes, ...r.removedNodes].every(isOurs);
     new MutationObserver((records) => {
       if (!records.every(ours)) dismissResumedBanners(document);
     }).observe(document.body, { childList: true, subtree: true });
@@ -3321,6 +3354,11 @@ footer form#feedback { display: none !important; }
   var DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
   var PANEL = "[data-testid=helper]";
   var ICON_COLUMN = "[data-testid=chrome-sidebar]";
+  var TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
+  var BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
+  var CLEAR_OF_BUTTONS = 8;
+  var RUN_STRIP_ROOM = 96;
+  var BOTTOM_BUTTONS_INSET = 20;
   var TRIES = 4;
   var SETTLE_MS = 1200;
   var MOUNT_MS = 15e3;
@@ -3328,12 +3366,17 @@ footer form#feedback { display: none !important; }
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: 42vh; flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
-    padding-bottom: 42vh; }
-  @media print { html[data-endeavor-drawer="docs"] ${PANEL} { display: none !important; } }
+    padding-bottom: var(--endeavor-drawer-pad, 42vh); }
+  #endeavor-docs-grip { display: none; }
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+    left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
+  #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
+    border-radius: 2px; background: var(--e-control-edge); }
+  @media print { html[data-endeavor-drawer="docs"] :is(${PANEL}, #endeavor-docs-grip) { display: none !important; } }
 `;
   function showsDocs(panelSize, title) {
     return Number(panelSize) > 0 && title.trim().toLowerCase() === "documentation";
@@ -3363,6 +3406,15 @@ footer form#feedback { display: none !important; }
     if (!column) return { left: 0, bottom: 0 };
     return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
   }
+  function tallestBelowButtons(innerHeight, footer, topButtonsBottom, bottomButtonsHeight) {
+    return innerHeight - footer - (topButtonsBottom + CLEAR_OF_BUTTONS + RUN_STRIP_ROOM + CLEAR_OF_BUTTONS + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+  }
+  function tallestDrawer() {
+    const top = document.querySelector(TOP_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+    const bottom = document.querySelector(BOTTOM_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+    if (!top || !bottom) return Infinity;
+    return tallestBelowButtons(window.innerHeight, besideIconColumn().bottom, top.bottom, bottom.height);
+  }
   function sidebarDragging() {
     return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
   }
@@ -3377,6 +3429,7 @@ footer form#feedback { display: none !important; }
     const root = document.documentElement.style;
     if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
     if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+    if (drawerTab()) refitDrawer();
     const open3 = docsShown();
     if (open3 && drawerTab() !== "docs") openDrawer("docs");
     else if (!open3 && drawerTab() === "docs") openDrawer(null);
@@ -3384,10 +3437,19 @@ footer form#feedback { display: none !important; }
     reported = open3;
     send({ type: "docs", open: open3 });
   }
+  function addGrip() {
+    const grip = document.createElement("div");
+    grip.id = "endeavor-docs-grip";
+    grip.dataset.endeavorUi = "";
+    document.body.append(grip);
+    resizesDrawer(grip, () => document.querySelector(PANEL));
+  }
   function initMarimoDocs() {
     const style2 = document.createElement("style");
     style2.textContent = css16;
     document.head.append(style2);
+    addGrip();
+    capDrawer(tallestDrawer);
     const press = () => {
       const option = document.querySelector(DOCS_OPTION);
       option?.click();

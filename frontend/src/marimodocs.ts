@@ -1,9 +1,14 @@
 import { on, send } from "./bridge";
-import { drawerTab, openDrawer } from "./drawer";
+import { capDrawer, drawerTab, openDrawer, refitDrawer, resizesDrawer } from "./drawer";
 
 const DOCS_OPTION = "[data-testid=chrome-sidebar] [role=option][data-key=documentation]";
 const PANEL = "[data-testid=helper]";
 const ICON_COLUMN = "[data-testid=chrome-sidebar]";
+const TOP_BUTTONS = "[data-testid=notebook-menu-dropdown]";
+const BOTTOM_BUTTONS = "[data-testid=command-palette-button]";
+const CLEAR_OF_BUTTONS = 8;
+const RUN_STRIP_ROOM = 96;
+const BOTTOM_BUTTONS_INSET = 20;
 const TRIES = 4;
 const SETTLE_MS = 1200;
 const MOUNT_MS = 15000;
@@ -12,12 +17,17 @@ const POLL_MS = 50;
 const css = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: 42vh; flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
-    padding-bottom: 42vh; }
-  @media print { html[data-endeavor-drawer="docs"] ${PANEL} { display: none !important; } }
+    padding-bottom: var(--endeavor-drawer-pad, 42vh); }
+  #endeavor-docs-grip { display: none; }
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+    left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
+  #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
+    border-radius: 2px; background: var(--e-control-edge); }
+  @media print { html[data-endeavor-drawer="docs"] :is(${PANEL}, #endeavor-docs-grip) { display: none !important; } }
 `;
 
 export function showsDocs(panelSize: string | null, title: string): boolean {
@@ -53,6 +63,17 @@ export function besideIconColumn(): { left: number; bottom: number } {
   return { left: Math.max(0, Math.round(column.right)), bottom: Math.max(0, Math.round(window.innerHeight - column.bottom)) };
 }
 
+export function tallestBelowButtons(innerHeight: number, footer: number, topButtonsBottom: number, bottomButtonsHeight: number): number {
+  return innerHeight - footer - (topButtonsBottom + CLEAR_OF_BUTTONS + RUN_STRIP_ROOM + CLEAR_OF_BUTTONS + bottomButtonsHeight + BOTTOM_BUTTONS_INSET);
+}
+
+function tallestDrawer(): number {
+  const top = document.querySelector(TOP_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+  const bottom = document.querySelector(BOTTOM_BUTTONS)?.closest(".absolute")?.getBoundingClientRect();
+  if (!top || !bottom) return Infinity;
+  return tallestBelowButtons(window.innerHeight, besideIconColumn().bottom, top.bottom, bottom.height);
+}
+
 export function sidebarDragging(): boolean {
   return !!document.querySelector(`${ICON_COLUMN} [role=option][inert]`);
 }
@@ -69,6 +90,7 @@ function follow() {
   const root = document.documentElement.style;
   if (root.getPropertyValue("--endeavor-docs-left") !== `${left}px`) root.setProperty("--endeavor-docs-left", `${left}px`);
   if (root.getPropertyValue("--endeavor-docs-bottom") !== `${bottom}px`) root.setProperty("--endeavor-docs-bottom", `${bottom}px`);
+  if (drawerTab()) refitDrawer();
   const open = docsShown();
   if (open && drawerTab() !== "docs") openDrawer("docs");
   else if (!open && drawerTab() === "docs") openDrawer(null);
@@ -77,10 +99,20 @@ function follow() {
   send({ type: "docs", open });
 }
 
+function addGrip(): void {
+  const grip = document.createElement("div");
+  grip.id = "endeavor-docs-grip";
+  grip.dataset.endeavorUi = "";
+  document.body.append(grip);
+  resizesDrawer(grip, () => document.querySelector<HTMLElement>(PANEL));
+}
+
 export function initMarimoDocs(): void {
   const style = document.createElement("style");
   style.textContent = css;
   document.head.append(style);
+  addGrip();
+  capDrawer(tallestDrawer);
   const press = () => {
     const option = document.querySelector<HTMLElement>(DOCS_OPTION);
     option?.click();
