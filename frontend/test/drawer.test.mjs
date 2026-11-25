@@ -271,3 +271,66 @@ test("on marimo Packages stays at the bottom in a wide pane, where marimo's own 
   assert.equal(p.drawer(), "packages");
   assert.equal("endeavorDrawerSide" in p.window.document.documentElement.dataset, false);
 });
+
+test("marimo's docs panel has the drawer's grip, and a drag sets the height both drawers share, measured from above marimo's footer", async () => {
+  const p = await marimoPage();
+  const { document } = p.window;
+  const panel = document.createElement("div");
+  panel.dataset.testid = "helper";
+  panel.getBoundingClientRect = () => ({ top: 400, bottom: p.window.innerHeight - 30, left: 48, right: 1000 });
+  document.body.append(panel);
+  const grip = document.querySelector("#endeavor-docs-grip");
+  assert.ok(grip, "the docs panel gets a grip");
+  grip.setPointerCapture = () => {};
+  const pointer = (type, clientY) => grip.dispatchEvent(new p.window.MouseEvent(type, { clientY, bubbles: true }));
+  pointer("pointerdown", 500);
+  pointer("pointermove", 400);
+  assert.equal(document.documentElement.style.getPropertyValue("user-select"), "none", "a drag selects no text in the notebook");
+  pointer("pointerup", 400);
+  assert.equal(document.documentElement.style.getPropertyValue("user-select"), "", "text can be selected again after the drag");
+  const root = document.documentElement.style;
+  const expected = `${p.window.innerHeight - 30 - 400}px`;
+  assert.equal(root.getPropertyValue("--endeavor-drawer-h"), expected);
+  assert.equal(root.getPropertyValue("--endeavor-drawer-pad"), expected);
+  assert.equal(p.window.localStorage.getItem("endeavor-drawer-h"), String(p.window.innerHeight - 30 - 400));
+
+  for (const ending of ["pointercancel", "lostpointercapture"]) {
+    pointer("pointerdown", 400);
+    pointer("pointermove", 350);
+    pointer(ending, 350);
+    pointer("pointermove", 200);
+    pointer("pointerup", 200);
+    assert.equal(root.getPropertyValue("--endeavor-drawer-h"), `${p.window.innerHeight - 30 - 350}px`, `a move after ${ending} changes nothing`);
+  }
+});
+
+test("on marimo a drawer can't grow over marimo's floating buttons: it stops below the top ones, with room for the column at the bottom right", async () => {
+  const p = await marimoPage();
+  const { document } = p.window;
+  const placed = (html, rect) => {
+    const holder = document.createElement("div");
+    holder.className = "absolute";
+    holder.innerHTML = html;
+    holder.getBoundingClientRect = () => rect;
+    document.body.append(holder);
+  };
+  placed('<button data-testid="notebook-menu-dropdown"></button>', { top: 11, bottom: 38, height: 27 });
+  placed('<button data-testid="command-palette-button"></button>', { top: 599, bottom: 803, height: 204 });
+  const panel = document.createElement("div");
+  panel.dataset.testid = "helper";
+  panel.getBoundingClientRect = () => ({ top: 400, bottom: p.window.innerHeight, left: 48, right: 1000 });
+  document.body.append(panel);
+  const grip = document.querySelector("#endeavor-docs-grip");
+  grip.setPointerCapture = () => {};
+  const pointer = (type, clientY) => grip.dispatchEvent(new p.window.MouseEvent(type, { clientY, bubbles: true }));
+  pointer("pointerdown", 400);
+  pointer("pointermove", 20);
+  pointer("pointerup", 20);
+  const tallest = p.window.innerHeight - (38 + 8 + 96 + 8 + 204 + 20);
+  assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`);
+
+  p.window.localStorage.setItem("endeavor-drawer-h", "700");
+  p.window.__endeavor.receive({ type: "drawer", tab: "packages" });
+  await p.settle();
+  assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`, "a taller saved height is fitted when a drawer opens");
+});
