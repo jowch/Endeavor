@@ -102,12 +102,12 @@ pub struct Steps {
     pub since: Instant,
     pub detail: Option<String>,
     found_julia: bool,
-    for_r: bool,
+    starts_julia: bool,
 }
 
 impl Steps {
     fn new(current: impl Into<String>) -> Steps {
-        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false, for_r: false }
+        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false, starts_julia: true }
     }
 
     fn advance(&mut self, done: impl Into<String>, next: impl Into<String>) {
@@ -129,7 +129,7 @@ impl Steps {
         if self.current == pluto::OPENING {
             return left;
         }
-        if !self.for_r && !self.current.starts_with("Starting Julia") {
+        if self.starts_julia && !self.current.starts_with("Starting Julia") {
             left.push("Start Julia");
         }
         left.push("Open notebook");
@@ -160,7 +160,7 @@ impl Steps {
         }
         let done = self.current.trim_end_matches('…').replacen("Starting", "Started", 1).replacen("Installing", "Installed", 1);
         self.advance(done, pluto::OPENING);
-        self.detail = Some(if self.for_r { "The first notebook can take a minute to open." } else { "The first notebook after Julia starts takes a while to compile." }.into());
+        self.detail = Some(if self.starts_julia { "The first notebook after Julia starts takes a while to compile." } else { "The first notebook can take a minute to open." }.into());
     }
 
     fn first(step: &str, start: impl FnOnce() -> Steps) -> Steps {
@@ -172,11 +172,11 @@ impl Steps {
     }
 
     fn r() -> Steps {
-        Steps { for_r: true, ..Steps::new("Starting R") }
+        Steps { starts_julia: false, ..Steps::new("Starting R") }
     }
 
     fn python() -> Steps {
-        Steps { for_r: true, ..Steps::new("Starting Python") }
+        Steps { starts_julia: false, ..Steps::new("Starting Python") }
     }
 
     fn r_step(&mut self, step: &str) {
@@ -1905,14 +1905,14 @@ impl Workspace {
         cx.notify();
     }
 
-    fn retry_r(&mut self, host: &HostId, kind: Backend, install: Option<Backend>, cx: &mut Context<Self>) {
+    fn retry_r(&mut self, host: &HostId, kind: Backend, install: bool, cx: &mut Context<Self>) {
         let bridge = self.connections.get_mut(host).and_then(|connection| {
             *connection.failed(kind) = None;
             connection.bridge()
         });
         let Some(again) = self.r_retry_target(host) else { return cx.notify() };
-        match bridge.zip(install) {
-            Some((bridge, kind)) => {
+        match bridge.filter(|_| install) {
+            Some(bridge) => {
                 let allowed = cx.background_executor().spawn(async move { if kind == Backend::Marimo { pluto::allow_uv_install(&bridge) } else { pluto::allow_r_install(&bridge) } });
                 let host = host.clone();
                 cx.spawn(async move |this, cx| {
@@ -2037,7 +2037,7 @@ impl Workspace {
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
                 let shows = r_failed_shows(host, &error, self.hosts.downloads_own_uv(host), own_r_offered());
-                let button = |label: &'static str, install: Option<Backend>| {
+                let button = |label: &'static str, install: bool| {
                     let host = host_id.clone();
                     div()
                         .id(shows.button())
@@ -2055,15 +2055,15 @@ impl Workspace {
                 match &shows {
                     RFailedShows::InstallUv => {
                         let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {name}.");
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", Some(Backend::Marimo)))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", true))
                     }
                     RFailedShows::NoUv => {
                         let words = format!("Python notebooks need uv. Install it on {name} (docs.astral.sh/uv), then try again.");
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", false))
                     }
                     RFailedShows::PythonFailed(why) => {
                         let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
-                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", false))
                     }
                     RFailedShows::InstallR(item) => {
                         let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
@@ -2072,11 +2072,11 @@ impl Workspace {
                             item.name,
                             crate::platform::this_computer!(lower)
                         );
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("Install R", Some(Backend::Ember)))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("Install R", true))
                     }
                     RFailedShows::RFailed(why) => {
                         let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
-                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", false))
                     }
                 }
             }
