@@ -36,7 +36,7 @@ export function setDrawerSource(source: () => Drawer): void {
   drawerOf = source;
 }
 
-export function report(): void {
+export function report(again = false): void {
   const editor = (window as any).editor_state;
   if (!last || !model) return;
   const msg = {
@@ -54,7 +54,7 @@ export function report(): void {
     drawer: drawerOf(),
   };
   const json = JSON.stringify(msg);
-  if (json === lastSent) return;
+  if (json === lastSent && !again) return;
   lastSent = json;
   send(msg);
 }

@@ -207,6 +207,14 @@ fn logged_clicks(button: Stateful<Div>, name: &'static str) -> Stateful<Div> {
         .on_mouse_up(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} up")))
 }
 
+pub fn drawer_after_docs_report(before: Option<String>, docs_open: bool) -> Option<String> {
+    match (docs_open, before) {
+        (true, _) => Some("docs".into()),
+        (false, Some(docs)) if docs == "docs" => None,
+        (false, other) => other,
+    }
+}
+
 pub fn clicked_drawer(showing: Option<&str>, tab: &'static str) -> Option<&'static str> {
     (showing != Some(tab)).then_some(tab)
 }
@@ -873,7 +881,6 @@ impl Workspace {
     }
 
     pub fn open_drawer(&mut self, tab: Option<&str>, cx: &mut Context<Self>) {
-        self.page.drawer = tab.map(str::to_owned);
         self.drawer_ask.asked(tab);
         self.send_to_page(&serde_json::json!({ "type": "drawer", "tab": tab }), cx);
         cx.notify();
@@ -1928,6 +1935,15 @@ mod tests {
         assert_eq!(clicked_drawer(showing.as_deref(), "docs"), Some("docs"));
         assert_eq!(clicked_drawer(Some("docs"), "docs"), None);
         assert_eq!(clicked_drawer(Some("packages"), "docs"), Some("docs"));
+    }
+
+    #[test]
+    fn marimo_closing_its_docs_panel_leaves_packages_open() {
+        use super::drawer_after_docs_report;
+        assert_eq!(drawer_after_docs_report(Some("packages".into()), false), Some("packages".into()));
+        assert_eq!(drawer_after_docs_report(Some("docs".into()), false), None);
+        assert_eq!(drawer_after_docs_report(None, true), Some("docs".into()));
+        assert_eq!(drawer_after_docs_report(Some("packages".into()), true), Some("docs".into()));
     }
 
     #[test]
