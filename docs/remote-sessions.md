@@ -274,9 +274,6 @@ Content-Length, so the body is read to the end.
   cells the user ran while it waited, each with its `last_run` from before,
   so the approved call doesn't run them again. An older runtime hears this
   separately (`run_anyway`).
-- **Stop goes to the runtime too** (`stop_session`). The runtime doesn't hear
-  the agent's stop when no tool call is under way, so it interrupts the
-  session's runs only when the app says so.
 - **R endings are keyed on their time** (`new_endings`), so a notebook that
   opened again and whose R ended again between two pushes shows its second
   ending (#122).

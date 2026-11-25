@@ -1388,12 +1388,8 @@ impl Workspace {
         for effect in effects {
             match effect {
                 Effect::Send(turn) => {
-                    let stop = matches!(turn, agent::Turn::Cancel);
                     if let Some(id) = self.session_mut(key).and_then(|s| s.id.clone()) {
                         self.links.send(agent, Command::Turn(id, turn));
-                    }
-                    if stop {
-                        self.stop_session_runs(key, cx);
                     }
                 }
                 Effect::ShowNotebook { id, path } => {
@@ -1612,17 +1608,6 @@ impl Workspace {
             }
         }
         effects
-    }
-
-    fn stop_session_runs(&self, key: u64, cx: &mut Context<Self>) {
-        let Some(bridge) = self.session_bridge(key) else { return };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = pluto::stop_session(&bridge, key) {
-                    eprintln!("Stop: the runtime couldn't stop session {key}'s runs: {error}");
-                }
-            })
-            .detach();
     }
 
     pub fn send_policy(&self, key: u64, policy: &'static str, edits: bool, cx: &mut Context<Self>) {
