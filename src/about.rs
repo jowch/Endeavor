@@ -477,7 +477,7 @@ impl Render for Licences {
 #[cfg(test)]
 mod tests {
     use super::{Action, Adapter, AppUpdate, BUILD, Notice, Updates, VERSION, notices, parts};
-    use crate::updater::FROM_SOURCE;
+    use crate::updater::{FROM_SOURCE, NOT_IN_BUNDLE, NOT_MAC_OR_WINDOWS, NOWHERE, UNSIGNED};
 
     #[test]
     fn the_feedback_link_carries_only_build_platform_and_agent() {
@@ -531,7 +531,15 @@ mod tests {
         assert_eq!(row(AppUpdate::Checking(None)), ("Checking for a newer build…".into(), None, false));
         assert_eq!(row(AppUpdate::Checking(Some(40))), ("Downloading the newest build… 40%".into(), None, false));
         assert_eq!(row(AppUpdate::Installing), ("Installing the new build…".into(), None, false));
-        assert_eq!(row(AppUpdate::Off("only the Mac and Windows apps update themselves")).0, format!("Version {VERSION}. Only the Mac and Windows apps update themselves."));
+        for (why, says) in [
+            (FROM_SOURCE, "A build from source doesn't update itself."),
+            (NOT_MAC_OR_WINDOWS, "Only the Mac and Windows apps update themselves."),
+            (NOWHERE, "This copy can't tell where it's installed, so it doesn't update itself."),
+            (NOT_IN_BUNDLE, "This copy isn't running from Endeavor.app, so it doesn't update itself."),
+            (UNSIGNED, "This copy isn't signed, so it doesn't update itself."),
+        ] {
+            assert_eq!(row(AppUpdate::Off(why)), (format!("Version {VERSION}. {says}"), None, false));
+        }
         assert_eq!(row(AppUpdate::Failed("couldn't reach GitHub".into())), ("Couldn't check for a newer build: couldn't reach GitHub.".into(), Some("Check now"), false));
         assert_eq!(row(AppUpdate::Manual { build: "abc1234".into(), protected: false }).1, Some("Download"));
         let protected = row(AppUpdate::Manual { build: "abc1234".into(), protected: true });

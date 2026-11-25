@@ -15,6 +15,10 @@ pub const RELEASE_PAGE: &str = "https://github.com/jowch/Endeavor/releases/tag/n
 const PLATFORM: &str = if cfg!(windows) { "windows-x86_64" } else { "macos-arm64" };
 const APP: &str = "Endeavor.app";
 pub const FROM_SOURCE: &str = "a build from source doesn't update itself";
+pub const NOT_MAC_OR_WINDOWS: &str = "only the Mac and Windows apps update themselves";
+pub const NOWHERE: &str = "this copy can't tell where it's installed, so it doesn't update itself";
+pub const NOT_IN_BUNDLE: &str = "this copy isn't running from Endeavor.app, so it doesn't update itself";
+pub const UNSIGNED: &str = "this copy isn't signed, so it doesn't update itself";
 
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
@@ -93,18 +97,18 @@ pub fn place() -> Result<Place, &'static str> {
         return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false, protected: false });
     }
     if !cfg!(any(target_os = "macos", windows)) {
-        return Err("only the Mac and Windows apps update themselves");
+        return Err(NOT_MAC_OR_WINDOWS);
     }
     if CHANNEL != "nightly" {
         return Err(FROM_SOURCE);
     }
-    let exe = std::env::current_exe().map_err(|_| "can't tell where the app is")?;
+    let exe = std::env::current_exe().map_err(|_| NOWHERE)?;
     if cfg!(windows) {
-        let app = install_of(&exe).ok_or("can't tell where the app is")?;
+        let app = install_of(&exe).ok_or(NOWHERE)?;
         let replaceable = app.join(UNINSTALLER).is_file();
         return Ok(Place { app, replaceable, protected: false });
     }
-    let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
+    let app = bundle_of(&exe).ok_or(NOT_IN_BUNDLE)?;
     let folder = app.parent().is_some_and(writable);
     let own = write_access(&app);
     Ok(Place { replaceable: folder && own.is_ok(), protected: folder && own == Err(NoWrite::AppManagement), app })
@@ -269,7 +273,7 @@ pub fn check(place: &Place, commit: &str, committed: &str, progress: &dyn Fn(f32
     let staged = if cfg!(windows) {
         fetch_installer(RELEASE, &folder()?, &offer, progress)?
     } else {
-        let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off("this copy isn't signed with a Developer ID")) };
+        let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off(UNSIGNED)) };
         fetch(&folder()?, &offer, &team, committed, progress)?
     };
     Ok(Outcome::Ready { build: offer.build(), commit: offer.commit, staged })
