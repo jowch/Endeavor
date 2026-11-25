@@ -342,7 +342,7 @@ impl Workspace {
             });
             let checked = match action {
                 Some(NotebookAction::LookEndeavor) => Some(self.settings.notebook_theme == NotebookTheme::Endeavor),
-                Some(NotebookAction::LookClassic | NotebookAction::LookEmber) => Some(self.settings.notebook_theme == NotebookTheme::Pluto),
+                Some(NotebookAction::LookClassic | NotebookAction::LookEmber | NotebookAction::LookMarimo) => Some(self.settings.notebook_theme == NotebookTheme::Pluto),
                 _ => None,
             };
             let color = if danger { theme::danger() } else { theme::text_muted() };

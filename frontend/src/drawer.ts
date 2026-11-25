@@ -7,11 +7,12 @@ import type { NotebookLike, StatusModel } from "./status";
 const HEADER = 36;
 const SIDE_WIDTH = 500;
 const SIDE_FROM = 1300;
+export const UNDER_MARIMO_POPOVERS = 40;
 
 const css = `
   #endeavor-drawer { display: none; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] #endeavor-drawer { display: flex; }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex;
     left: var(--endeavor-docs-left, 0px); bottom: var(--endeavor-docs-bottom, 0px); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
@@ -19,6 +20,7 @@ const css = `
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
+  html[data-endeavor-engine="marimo"] #endeavor-drawer { z-index: ${UNDER_MARIMO_POPOVERS}; }
   #endeavor-drawer .grip { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: ns-resize; }
   #endeavor-drawer .grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }

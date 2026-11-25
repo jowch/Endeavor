@@ -689,7 +689,7 @@ impl Workspace {
             loop {
                 let Ok(()) = this.update(cx, |this, cx| {
                     if this.app_update.due(Instant::now()) {
-                        this.check_for_update(cx);
+                        this.check_for_update(false, cx);
                     }
                 }) else {
                     break;
@@ -2165,7 +2165,8 @@ impl Workspace {
 
     fn app_update_state(&self) -> about::AppUpdate {
         match &self.app_update.state {
-            updater::State::Off(_) | updater::State::Installing => about::AppUpdate::Off,
+            updater::State::Off(why) => about::AppUpdate::Off(why),
+            updater::State::Installing => about::AppUpdate::Installing,
             updater::State::Waiting => about::AppUpdate::Unchecked,
             updater::State::Checking => about::AppUpdate::Checking(self.app_update.percent()),
             updater::State::UpToDate => about::AppUpdate::UpToDate,
@@ -2176,8 +2177,9 @@ impl Workspace {
         }
     }
 
-    pub fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        let Some(place) = self.app_update.start(Instant::now()) else { return };
+    pub fn check_for_update(&mut self, asked: bool, cx: &mut Context<Self>) {
+        let started = Instant::now();
+        let Some(place) = self.app_update.start(started) else { return };
         let progress = self.app_update.progress.clone();
         let checked = cx.background_executor().spawn(async move {
             updater::check(&place, updater::COMMIT, updater::COMMITTED, &|f| progress.store((f.clamp(0., 1.) * 1000.) as u32, std::sync::atomic::Ordering::Relaxed))
@@ -2187,6 +2189,7 @@ impl Workspace {
             if let Err(e) = &result {
                 eprintln!("Update check: {e}");
             }
+            cx.background_executor().timer(updater::checking_left(asked, started.elapsed())).await;
             let _ = this.update(cx, |this, cx| {
                 this.app_update.finish(result);
                 cx.notify();

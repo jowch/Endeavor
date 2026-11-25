@@ -334,3 +334,24 @@ test("on marimo a drawer can't grow over marimo's floating buttons: it stops bel
   await p.settle();
   assert.equal(document.documentElement.style.getPropertyValue("--endeavor-drawer-h"), `${tallest}px`, "a taller saved height is fitted when a drawer opens");
 });
+
+test("a Python notebook takes Endeavor's look from the app's look switch, and marimo's own look when switched back", async () => {
+  const p = await marimoPage();
+  const { document } = p.window;
+  const look = document.getElementById("endeavor-theme");
+  assert.ok(look, "the look's stylesheet is on marimo's page");
+  assert.match(look.textContent, /html\[data-endeavor-look="endeavor"\] body\.dark/);
+  assert.match(look.textContent, /html\[data-endeavor-look="endeavor"\] body\.light/);
+  p.window.__endeavor.receive({ type: "theme", name: "endeavor" });
+  assert.equal(document.documentElement.dataset.endeavorLook, "endeavor");
+  p.window.__endeavor.receive({ type: "theme", name: "pluto" });
+  assert.equal(document.documentElement.dataset.endeavorLook, "pluto");
+});
+
+test("on marimo the Packages drawer sits under marimo's menus and popovers, as marimo's own docs panel does", async () => {
+  const p = await marimoPage();
+  p.window.__endeavor.receive({ type: "drawer", tab: "packages" });
+  await p.settle();
+  const z = Number(p.window.getComputedStyle(p.window.document.getElementById("endeavor-drawer")).zIndex);
+  assert.ok(z > 0 && z < 50, `z-index ${z} is under marimo's popovers (z-50)`);
+});

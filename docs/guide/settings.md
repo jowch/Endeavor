@@ -109,8 +109,8 @@ server…** and **Add cluster…** add new ones. See [Servers](./servers.md) and
   which follows your Mac's setting. The whole window changes, notebook
   included.
 - **Notebook look**: **Endeavor** (the default) puts the notebook's controls
-  in its header, in Endeavor's colours. **Classic** shows Pluto's or Ember's
-  own page, as it looks outside Endeavor. You can also switch in the
+  in its header, in Endeavor's colours. **Classic** shows Pluto's, Ember's or
+  marimo's own page, as it looks outside Endeavor. You can also switch in the
   notebook's **⋮** menu. Exported notebooks always use their standard look.
 - **Text size** isn't in Settings. Press ⌘= to make text bigger, ⌘− to make
   it smaller and ⌘0 to go back to the usual size (Ctrl on Windows and Linux),
@@ -131,5 +131,5 @@ Claude. The Mac and Windows test builds check for a newer test build once a day,
 **Restart** installs it, and so does quitting Endeavor. While an agent is
 working, Restart waits until it's done. When Endeavor can't replace
 itself, it offers **Download** instead: on a Mac when it isn't in your
-Applications folder, on Windows when it wasn't put there by the installer. Other copies, such as one built from the source code, show only
-their version (see [Overview](./overview.md)).
+Applications folder, on Windows when it wasn't put there by the installer. Other copies, such as one built from the source code or the Linux app, show
+their version and say that they don't update themselves (see [Overview](./overview.md)).

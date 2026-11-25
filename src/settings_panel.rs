@@ -991,7 +991,7 @@ impl Workspace {
                 Some("Notebook look"),
                 vec![Item::Pictures(vec![
                     pic("look-endeavor", Thumb::Endeavor, "Endeavor", Some("The notebook's controls sit in the pane's header, in Endeavor's colours."), s.notebook_theme == NotebookTheme::Endeavor, Act::Look(NotebookTheme::Endeavor)),
-                    pic("look-classic", Thumb::Classic, "Classic", Some("Pluto's or Ember's own page, as it looks outside Endeavor."), s.notebook_theme == NotebookTheme::Pluto, Act::Look(NotebookTheme::Pluto)),
+                    pic("look-classic", Thumb::Classic, "Classic", Some("Pluto's, Ember's or marimo's own page, as it looks outside Endeavor."), s.notebook_theme == NotebookTheme::Pluto, Act::Look(NotebookTheme::Pluto)),
                 ])],
             )
             .foot("You can also switch from the notebook's ⋮ menu. Shared and exported notebooks always use their standard look."),
@@ -1488,7 +1488,7 @@ impl Workspace {
             Act::Update(action) => match action {
                 about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
-                about::Action::CheckNow => self.check_for_update(cx),
+                about::Action::CheckNow => self.check_for_update(true, cx),
                 about::Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
             },
             Act::Website => crate::platform::open_url(about::WEBSITE, cx),
