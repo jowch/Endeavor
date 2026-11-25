@@ -1430,6 +1430,15 @@ ${text.value}` : sent2.comment;
     padding: 3px 8px; border-radius: 6px; background: var(--e-popover-bg); color: var(--e-text-primary);
     border: 1px solid var(--e-popover-edge); box-shadow: 0 4px 12px var(--e-shadow-popover); font: 11.5px system-ui, -apple-system, sans-serif; }
   #endeavor-rail-tip[hidden] { display: none; }
+  #endeavor-rail-tip .state { margin-left: 6px; }
+  #endeavor-rail-tip .state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%;
+    vertical-align: 1px; background: var(--e-you-stripe); }
+  #endeavor-rail-tip[data-state="pending"] .state { color: var(--e-text-secondary); }
+  #endeavor-rail-tip[data-state="pending"] .state::before { opacity: 0.4; }
+  #endeavor-rail-tip[data-state="running"] .state, #endeavor-rail-tip[data-state="claude"] .state { color: var(--e-accent); }
+  #endeavor-rail-tip[data-state="running"] .state::before, #endeavor-rail-tip[data-state="claude"] .state::before { background: var(--e-accent); }
+  #endeavor-rail-tip[data-state="failed"] .state { color: var(--e-danger); }
+  #endeavor-rail-tip[data-state="failed"] .state::before { background: var(--e-danger); }
   @media print { #endeavor-rail, #endeavor-rail-tip { display: none !important; } }
 `;
   var inSafePreview = () => document.querySelector("pluto-editor.process_waiting_for_permission") !== null;
@@ -1451,7 +1460,7 @@ ${text.value}` : sent2.comment;
     if (has("errored")) return "failed";
     return "ran";
   }
-  var stateWords = (state2) => ({ ran: "ran", pending: "not run yet", running: "running", failed: "failed", claude: `${context.agent} edited it, not run` })[state2] ?? "";
+  var stateWords = (state2) => ({ ran: null, pending: "not run yet", running: "running", failed: "error", claude: `${context.agent}'s edit, not run` })[state2] ?? null;
   var rail;
   var view;
   var tip;
@@ -1557,7 +1566,15 @@ ${text.value}` : sent2.comment;
       return;
     }
     const r = mark.getBoundingClientRect();
-    tip.textContent = `${cellName(codeOf(cell))} \xB7 ${stateWords(mark.dataset.state)}`;
+    const state2 = mark.dataset.state;
+    const words = stateWords(state2);
+    const name = document.createElement("span");
+    name.textContent = cellName(codeOf(cell));
+    const said = document.createElement("span");
+    said.className = "state";
+    said.textContent = words ?? "";
+    tip.replaceChildren(...words ? [name, said] : [name]);
+    tip.dataset.state = state2;
     tip.hidden = false;
     tip.style.top = `${r.top + r.height / 2}px`;
     tip.style.left = "auto";

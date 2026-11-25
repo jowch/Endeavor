@@ -190,3 +190,18 @@ test("the rail sits left of a drawer beside the cells, and ends above one below 
   assert.deepEqual(await at({ left: 800, top: 0, width: 500, height: 900 }), [`${800 - 2 - 14}px`, "10px", "880px"], "beside: 2px clear of the drawer's edge, full height");
   assert.deepEqual(await at({ left: 0, top: 600, width: 1300, height: 300 }), [`${1300 - 12 - 14}px`, "10px", "580px"], "below: at the scroll bar, ending 10px above the drawer");
 });
+
+test("the rail's tip names a cell that ran, and adds the state only when it's out of the ordinary", async () => {
+  const { window, doc } = await page();
+  const rail = doc.getElementById("endeavor-rail");
+  const tip = doc.getElementById("endeavor-rail-tip");
+  const hoverFirst = async () => {
+    doc.body.append(doc.createElement("div"));
+    await new Promise((r) => setTimeout(r, 0));
+    rail.dispatchEvent(new window.MouseEvent("pointermove", { clientY: 1, bubbles: true }));
+    return [tip.textContent, tip.dataset.state, tip.querySelector(".state")?.textContent ?? null];
+  };
+  assert.deepEqual(await hoverFirst(), ["cell", "ran", null]);
+  doc.getElementById(A).classList.add("errored");
+  assert.deepEqual(await hoverFirst(), ["cellerror", "failed", "error"]);
+});

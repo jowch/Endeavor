@@ -26,6 +26,15 @@ const css = `
     padding: 3px 8px; border-radius: 6px; background: var(--e-popover-bg); color: var(--e-text-primary);
     border: 1px solid var(--e-popover-edge); box-shadow: 0 4px 12px var(--e-shadow-popover); font: 11.5px system-ui, -apple-system, sans-serif; }
   #endeavor-rail-tip[hidden] { display: none; }
+  #endeavor-rail-tip .state { margin-left: 6px; }
+  #endeavor-rail-tip .state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%;
+    vertical-align: 1px; background: var(--e-you-stripe); }
+  #endeavor-rail-tip[data-state="pending"] .state { color: var(--e-text-secondary); }
+  #endeavor-rail-tip[data-state="pending"] .state::before { opacity: 0.4; }
+  #endeavor-rail-tip[data-state="running"] .state, #endeavor-rail-tip[data-state="claude"] .state { color: var(--e-accent); }
+  #endeavor-rail-tip[data-state="running"] .state::before, #endeavor-rail-tip[data-state="claude"] .state::before { background: var(--e-accent); }
+  #endeavor-rail-tip[data-state="failed"] .state { color: var(--e-danger); }
+  #endeavor-rail-tip[data-state="failed"] .state::before { background: var(--e-danger); }
   @media print { #endeavor-rail, #endeavor-rail-tip { display: none !important; } }
 `;
 
@@ -50,8 +59,8 @@ export function runState(cell: Element): RunState {
   return "ran";
 }
 
-const stateWords = (state: RunState): string =>
-  ({ ran: "ran", pending: "not run yet", running: "running", failed: "failed", claude: `${context.agent} edited it, not run` })[state] ?? "";
+const stateWords = (state: RunState): string | null =>
+  ({ ran: null, pending: "not run yet", running: "running", failed: "error", claude: `${context.agent}'s edit, not run` })[state] ?? null;
 
 let rail: HTMLElement;
 let view: HTMLElement;
@@ -173,7 +182,15 @@ function showTip(mark: HTMLElement | null) {
     return;
   }
   const r = mark.getBoundingClientRect();
-  tip.textContent = `${cellName(codeOf(cell))} · ${stateWords(mark.dataset.state as RunState)}`;
+  const state = mark.dataset.state as RunState;
+  const words = stateWords(state);
+  const name = document.createElement("span");
+  name.textContent = cellName(codeOf(cell));
+  const said = document.createElement("span");
+  said.className = "state";
+  said.textContent = words ?? "";
+  tip.replaceChildren(...(words ? [name, said] : [name]));
+  tip.dataset.state = state;
   tip.hidden = false;
   tip.style.top = `${r.top + r.height / 2}px`;
   tip.style.left = "auto";
