@@ -201,6 +201,24 @@ pub fn header_drawer(kind: Backend, shown: bool, reported: Option<&PageState>, p
     }
 }
 
+fn logged_clicks(button: Stateful<Div>, name: &'static str) -> Stateful<Div> {
+    button
+        .on_mouse_down(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} down")))
+        .on_mouse_up(MouseButton::Left, move |_, _, _| crate::click_log::note(|| format!("{name} up")))
+}
+
+pub fn drawer_after_docs_report(before: Option<String>, docs_open: bool) -> Option<String> {
+    match (docs_open, before) {
+        (true, _) => Some("docs".into()),
+        (false, Some(docs)) if docs == "docs" => None,
+        (false, other) => other,
+    }
+}
+
+pub fn clicked_drawer(showing: Option<&str>, tab: &'static str) -> Option<&'static str> {
+    (showing != Some(tab)).then_some(tab)
+}
+
 #[derive(Debug, PartialEq)]
 pub enum HeaderTool {
     Share,
@@ -822,14 +840,17 @@ impl Workspace {
                 .children(share_menu.map(|menu| self.render_menu(menu, cx)))
                 .into_any_element()
         });
+        let after_click = |tab: &'static str| clicked_drawer(drawer.as_deref(), tab);
         let docs = tools.contains(&HeaderTool::Docs).then(|| {
-            tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into())
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("docs", cx)))
+            let next = after_click("docs");
+            logged_clicks(tip(header_button("header-docs", Glyph::Book, Some("Live docs"), drawer.as_deref() == Some("docs"), compact), "Live docs".into()), "header docs")
+                .on_click(cx.listener(move |this, _, _, cx| this.drawer_clicked("docs", next, cx)))
                 .into_any_element()
         });
         let packages = tools.contains(&HeaderTool::Packages).then(|| {
-            tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into())
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer("packages", cx)))
+            let next = after_click("packages");
+            logged_clicks(tip(header_button("header-packages", Glyph::Package, Some("Packages"), drawer.as_deref() == Some("packages"), compact), "Packages".into()), "header packages")
+                .on_click(cx.listener(move |this, _, _, cx| this.drawer_clicked("packages", next, cx)))
                 .into_any_element()
         });
 
@@ -854,13 +875,12 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn toggle_drawer(&mut self, tab: &str, cx: &mut Context<Self>) {
-        let next = (self.page.drawer.as_deref() != Some(tab)).then_some(tab);
+    fn drawer_clicked(&mut self, button: &str, next: Option<&str>, cx: &mut Context<Self>) {
+        crate::click_log::note(|| format!("header {button} click: app had {:?}, asks {next:?}", self.page.drawer));
         self.open_drawer(next, cx);
     }
 
     pub fn open_drawer(&mut self, tab: Option<&str>, cx: &mut Context<Self>) {
-        self.page.drawer = tab.map(str::to_owned);
         self.drawer_ask.asked(tab);
         self.send_to_page(&serde_json::json!({ "type": "drawer", "tab": tab }), cx);
         cx.notify();
@@ -1904,6 +1924,26 @@ mod tests {
         assert_eq!(header_drawer(Backend::Marimo, false, None, &open), None, "not while another pane shows");
         assert_eq!(header_drawer(Backend::Pluto, true, None, &open), None, "Julia goes by the page that reported its notebook");
         assert_eq!(header_drawer(Backend::Pluto, true, Some(&open), &open), Some("docs".into()));
+    }
+
+    #[test]
+    fn a_header_drawer_button_opens_its_drawer_when_it_shows_closed_whatever_an_older_page_said() {
+        use super::{PageState, clicked_drawer, header_drawer};
+        let older_page = PageState { notebook: "the notebook before it reopened".into(), drawer: Some("docs".into()), ..Default::default() };
+        let showing = header_drawer(Backend::Pluto, true, None, &older_page);
+        assert_eq!(showing, None);
+        assert_eq!(clicked_drawer(showing.as_deref(), "docs"), Some("docs"));
+        assert_eq!(clicked_drawer(Some("docs"), "docs"), None);
+        assert_eq!(clicked_drawer(Some("packages"), "docs"), Some("docs"));
+    }
+
+    #[test]
+    fn marimo_closing_its_docs_panel_leaves_packages_open() {
+        use super::drawer_after_docs_report;
+        assert_eq!(drawer_after_docs_report(Some("packages".into()), false), Some("packages".into()));
+        assert_eq!(drawer_after_docs_report(Some("docs".into()), false), None);
+        assert_eq!(drawer_after_docs_report(None, true), Some("docs".into()));
+        assert_eq!(drawer_after_docs_report(Some("packages".into()), true), Some("docs".into()));
     }
 
     #[test]

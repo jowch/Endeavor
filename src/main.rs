@@ -1999,7 +1999,7 @@ impl Workspace {
             Some(annotate::Message::RunAnyway { notebook, cells }) => self.run_anyway(notebook, cells, cx),
             Some(annotate::Message::AnswerCard { notebook, card }) => self.answer_card(notebook, card, cx),
             Some(annotate::Message::Docs(open)) => {
-                self.page.drawer = open.then(|| "docs".to_owned());
+                self.page.drawer = notebook_pane::drawer_after_docs_report(self.page.drawer.take(), open);
                 cx.notify();
             }
             Some(annotate::Message::AskedVisible(visible)) => {

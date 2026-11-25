@@ -329,7 +329,10 @@ export function initDrawer(): void {
   });
 
   setDrawerSource(() => tab);
-  on("drawer", (msg) => pick(msg.tab));
+  on("drawer", (msg) => {
+    pick(msg.tab);
+    report(true);
+  });
   on("context", (msg) => {
     hostName = msg.host;
     lastHtml = "";
