@@ -553,7 +553,7 @@
   function setDrawerSource(source) {
     drawerOf = source;
   }
-  function report() {
+  function report(again = false) {
     const editor2 = window.editor_state;
     if (!last || !model) return;
     const msg = {
@@ -571,7 +571,7 @@
       drawer: drawerOf()
     };
     const json = JSON.stringify(msg);
-    if (json === lastSent) return;
+    if (json === lastSent && !again) return;
     lastSent = json;
     send(msg);
   }
@@ -2472,7 +2472,10 @@ ${text.value}` : sent2.comment;
       if (!echoing && e.detail === "docs" && tab !== "docs") openDrawer("docs");
     });
     setDrawerSource(() => tab);
-    on("drawer", (msg) => pick(msg.tab));
+    on("drawer", (msg) => {
+      pick(msg.tab);
+      report(true);
+    });
     on("context", (msg) => {
       hostName = msg.host;
       lastHtml = "";
@@ -3460,6 +3463,7 @@ footer form#feedback { display: none !important; }
       moving++;
       void setDocs(msg.tab === "docs", docsShown, press, wait).finally(() => {
         moving--;
+        reported = null;
         follow3();
       });
     });
@@ -3551,7 +3555,7 @@ footer form#feedback { display: none !important; }
   var changed = null;
   var notebook2 = "";
   var sent = "";
-  function report3() {
+  function report3(again = false) {
     if (!notebook2 || !model2) return;
     const msg = {
       type: "state",
@@ -3567,7 +3571,7 @@ footer form#feedback { display: none !important; }
       drawer: drawerTab()
     };
     const json = JSON.stringify(msg);
-    if (json === sent) return;
+    if (json === sent && !again) return;
     sent = json;
     send(msg);
   }
@@ -3613,7 +3617,8 @@ footer form#feedback { display: none !important; }
       raw = msg.environment;
       refresh2();
     });
-    new MutationObserver(report3).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
+    on("drawer", () => report3(true));
+    new MutationObserver(() => report3()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
     new MutationObserver(hideMarimoInstallAlerts).observe(document.body, { childList: true, subtree: true });
   }
 
