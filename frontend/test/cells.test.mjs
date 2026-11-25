@@ -205,3 +205,13 @@ test("the rail's tip names a cell that ran, and adds the state only when it's ou
   doc.getElementById(A).classList.add("errored");
   assert.deepEqual(await hoverFirst(), ["cellerror", "failed", "error"]);
 });
+
+test("the rail's tip shows when the pointer lands on a mark without moving over it", async () => {
+  const { window, doc } = await page();
+  doc.body.append(doc.createElement("div"));
+  await new Promise((r) => setTimeout(r, 0));
+  const tip = doc.getElementById("endeavor-rail-tip");
+  doc.getElementById("endeavor-rail").dispatchEvent(new window.MouseEvent("pointerover", { clientY: 1, bubbles: true }));
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.textContent, "cell");
+});

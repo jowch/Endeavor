@@ -1598,6 +1598,9 @@ ${text.value}` : sent2.comment;
       if (dragging2 && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
       showTip(markAt(y(e)));
     });
+    rail.addEventListener("pointerover", (e) => {
+      if (!dragging2) showTip(markAt(y(e)));
+    });
     for (const end of ["pointerup", "pointercancel", "lostpointercapture"]) {
       rail.addEventListener(end, () => {
         dragging2 = false;

@@ -216,6 +216,9 @@ function wire() {
     if (dragging && Math.abs(y(e) - downY) > 4) scrollToFraction(y(e), false);
     showTip(markAt(y(e)));
   });
+  rail.addEventListener("pointerover", (e) => {
+    if (!dragging) showTip(markAt(y(e)));
+  });
   for (const end of ["pointerup", "pointercancel", "lostpointercapture"]) {
     rail.addEventListener(end, () => {
       dragging = false;
