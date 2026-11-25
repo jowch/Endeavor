@@ -2295,6 +2295,35 @@ ${text.value}` : sent2.comment;
     if (settle) root.setProperty("--endeavor-drawer-pad", `${clamped}px`);
     return clamped;
   }
+  function resizesDrawer(grip, resizing) {
+    grip.addEventListener("pointerdown", (e) => {
+      const resized = resizing();
+      if (!resized) return;
+      grip.setPointerCapture(e.pointerId);
+      const below = window.innerHeight - resized.getBoundingClientRect().bottom;
+      let pending2 = null;
+      let frame3 = 0;
+      const move = (m) => {
+        pending2 = window.innerHeight - below - m.clientY;
+        if (frame3) return;
+        frame3 = requestAnimationFrame(() => {
+          frame3 = 0;
+          if (pending2 !== null) setHeight(pending2, false);
+        });
+      };
+      const up = () => {
+        grip.removeEventListener("pointermove", move);
+        if (frame3) cancelAnimationFrame(frame3);
+        const h = setHeight(pending2 ?? resized.offsetHeight);
+        try {
+          localStorage.setItem("endeavor-drawer-h", String(h));
+        } catch {
+        }
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", up, { once: true });
+    });
+  }
   var drawerAtSide = (width) => width >= SIDE_FROM && !onMarimo();
   function placeSide() {
     if (drawerAtSide(window.innerWidth)) document.documentElement.dataset.endeavorDrawerSide = "";
@@ -2411,31 +2440,7 @@ ${text.value}` : sent2.comment;
     document.body.append(drawer);
     for (const b of drawer.querySelectorAll("header [data-tab]")) b.onclick = () => pick(b.dataset.tab);
     drawer.querySelector(".close").onclick = () => openDrawer(null);
-    const grip = drawer.querySelector(".grip");
-    grip.onpointerdown = (e) => {
-      grip.setPointerCapture(e.pointerId);
-      let pending2 = null;
-      let frame3 = 0;
-      const move = (m) => {
-        pending2 = window.innerHeight - m.clientY;
-        if (frame3) return;
-        frame3 = requestAnimationFrame(() => {
-          frame3 = 0;
-          if (pending2 !== null) setHeight(pending2, false);
-        });
-      };
-      const up = () => {
-        grip.removeEventListener("pointermove", move);
-        if (frame3) cancelAnimationFrame(frame3);
-        const h = setHeight(pending2 ?? drawer.offsetHeight);
-        try {
-          localStorage.setItem("endeavor-drawer-h", String(h));
-        } catch {
-        }
-      };
-      grip.addEventListener("pointermove", move);
-      grip.addEventListener("pointerup", up, { once: true });
-    };
+    resizesDrawer(drawer.querySelector(".grip"), () => drawer);
     window.addEventListener("open_bottom_right_panel", (e) => {
       if (!echoing && e.detail === "docs" && tab !== "docs") openDrawer("docs");
     });
@@ -3311,7 +3316,8 @@ footer form#feedback { display: none !important; }
   }
   function initDismissResumedBanner() {
     dismissResumedBanners(document);
-    const ours = (r) => r.target instanceof Element && !!r.target.closest("[data-endeavor-ui]");
+    const isOurs = (n) => n instanceof Element && !!n.closest("[data-endeavor-ui]");
+    const ours = (r) => isOurs(r.target) || [...r.addedNodes, ...r.removedNodes].every(isOurs);
     new MutationObserver((records) => {
       if (!records.every(ours)) dismissResumedBanners(document);
     }).observe(document.body, { childList: true, subtree: true });
@@ -3328,12 +3334,17 @@ footer form#feedback { display: none !important; }
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: 42vh; flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
-    padding-bottom: 42vh; }
-  @media print { html[data-endeavor-drawer="docs"] ${PANEL} { display: none !important; } }
+    padding-bottom: var(--endeavor-drawer-pad, 42vh); }
+  #endeavor-docs-grip { display: none; }
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+    left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
+  #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
+    border-radius: 2px; background: var(--e-control-edge); }
+  @media print { html[data-endeavor-drawer="docs"] :is(${PANEL}, #endeavor-docs-grip) { display: none !important; } }
 `;
   function showsDocs(panelSize, title) {
     return Number(panelSize) > 0 && title.trim().toLowerCase() === "documentation";
@@ -3384,10 +3395,18 @@ footer form#feedback { display: none !important; }
     reported = open3;
     send({ type: "docs", open: open3 });
   }
+  function addGrip() {
+    const grip = document.createElement("div");
+    grip.id = "endeavor-docs-grip";
+    grip.dataset.endeavorUi = "";
+    document.body.append(grip);
+    resizesDrawer(grip, () => document.querySelector(PANEL));
+  }
   function initMarimoDocs() {
     const style2 = document.createElement("style");
     style2.textContent = css16;
     document.head.append(style2);
+    addGrip();
     const press = () => {
       const option = document.querySelector(DOCS_OPTION);
       option?.click();

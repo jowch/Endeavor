@@ -119,6 +119,35 @@ function setHeight(h: number, settle = true) {
   return clamped;
 }
 
+export function resizesDrawer(grip: HTMLElement, resizing: () => HTMLElement | null): void {
+  grip.addEventListener("pointerdown", (e) => {
+    const resized = resizing();
+    if (!resized) return;
+    grip.setPointerCapture(e.pointerId);
+    const below = window.innerHeight - resized.getBoundingClientRect().bottom;
+    let pending: number | null = null;
+    let frame = 0;
+    const move = (m: PointerEvent) => {
+      pending = window.innerHeight - below - m.clientY;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (pending !== null) setHeight(pending, false);
+      });
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      if (frame) cancelAnimationFrame(frame);
+      const h = setHeight(pending ?? resized.offsetHeight);
+      try {
+        localStorage.setItem("endeavor-drawer-h", String(h));
+      } catch {}
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up, { once: true });
+  });
+}
+
 export const drawerAtSide = (width: number) => width >= SIDE_FROM && !onMarimo();
 
 function placeSide() {
@@ -262,30 +291,7 @@ export function initDrawer(): void {
   for (const b of drawer.querySelectorAll<HTMLElement>("header [data-tab]")) b.onclick = () => pick(b.dataset.tab as Drawer);
   drawer.querySelector<HTMLElement>(".close")!.onclick = () => openDrawer(null);
 
-  const grip = drawer.querySelector<HTMLElement>(".grip")!;
-  grip.onpointerdown = (e) => {
-    grip.setPointerCapture(e.pointerId);
-    let pending: number | null = null;
-    let frame = 0;
-    const move = (m: PointerEvent) => {
-      pending = window.innerHeight - m.clientY;
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        if (pending !== null) setHeight(pending, false);
-      });
-    };
-    const up = () => {
-      grip.removeEventListener("pointermove", move);
-      if (frame) cancelAnimationFrame(frame);
-      const h = setHeight(pending ?? drawer.offsetHeight);
-      try {
-        localStorage.setItem("endeavor-drawer-h", String(h));
-      } catch {}
-    };
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", up, { once: true });
-  };
+  resizesDrawer(drawer.querySelector<HTMLElement>(".grip")!, () => drawer);
 
   window.addEventListener("open_bottom_right_panel", (e) => {
     if (!echoing && (e as CustomEvent).detail === "docs" && tab !== "docs") openDrawer("docs");

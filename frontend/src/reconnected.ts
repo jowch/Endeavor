@@ -9,7 +9,9 @@ function dismissResumedBanners(root: ParentNode) {
 
 export function initDismissResumedBanner() {
   dismissResumedBanners(document);
-  const ours = (r: MutationRecord) => r.target instanceof Element && !!r.target.closest("[data-endeavor-ui]");
+  const isOurs = (n: Node) => n instanceof Element && !!n.closest("[data-endeavor-ui]");
+  const ours = (r: MutationRecord) =>
+    isOurs(r.target) || [...r.addedNodes, ...r.removedNodes].every(isOurs);
   new MutationObserver((records) => {
     if (!records.every(ours)) dismissResumedBanners(document);
   }).observe(document.body, { childList: true, subtree: true });

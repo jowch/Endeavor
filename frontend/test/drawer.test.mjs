@@ -271,3 +271,24 @@ test("on marimo Packages stays at the bottom in a wide pane, where marimo's own 
   assert.equal(p.drawer(), "packages");
   assert.equal("endeavorDrawerSide" in p.window.document.documentElement.dataset, false);
 });
+
+test("marimo's docs panel has the drawer's grip, and a drag sets the height both drawers share, measured from above marimo's footer", async () => {
+  const p = await marimoPage();
+  const { document } = p.window;
+  const panel = document.createElement("div");
+  panel.dataset.testid = "helper";
+  panel.getBoundingClientRect = () => ({ top: 400, bottom: p.window.innerHeight - 30, left: 48, right: 1000 });
+  document.body.append(panel);
+  const grip = document.querySelector("#endeavor-docs-grip");
+  assert.ok(grip, "the docs panel gets a grip");
+  grip.setPointerCapture = () => {};
+  const pointer = (type, clientY) => grip.dispatchEvent(new p.window.MouseEvent(type, { clientY, bubbles: true }));
+  pointer("pointerdown", 500);
+  pointer("pointermove", 400);
+  pointer("pointerup", 400);
+  const root = document.documentElement.style;
+  const expected = `${p.window.innerHeight - 30 - 400}px`;
+  assert.equal(root.getPropertyValue("--endeavor-drawer-h"), expected);
+  assert.equal(root.getPropertyValue("--endeavor-drawer-pad"), expected);
+  assert.equal(p.window.localStorage.getItem("endeavor-drawer-h"), String(p.window.innerHeight - 30 - 400));
+});
