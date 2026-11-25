@@ -36,7 +36,8 @@ pub struct Updates {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppUpdate {
-    Off,
+    Off(&'static str),
+    Installing,
     Unchecked,
     Checking(Option<u8>),
     UpToDate,
@@ -119,7 +120,8 @@ fn works_with_these(names: &[&str]) -> String {
 pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
     let check = Some(("Check now", Action::CheckNow, false));
     let (state, button, attention) = match &updates.app {
-        AppUpdate::Off => (format!("Version {VERSION}"), None, false),
+        AppUpdate::Off(why) => (format!("Version {VERSION}. {}.", sentence(why)), None, false),
+        AppUpdate::Installing => ("Installing the new build…".to_owned(), None, false),
         AppUpdate::Unchecked => (format!("Version {VERSION}"), check, false),
         AppUpdate::Checking(None) => ("Checking for a newer build…".to_owned(), None, false),
         AppUpdate::Checking(Some(p)) => (format!("Downloading the newest build… {p}%"), None, false),
@@ -147,6 +149,11 @@ pub fn parts(updates: &Updates) -> [UpdateRow; 2] {
         Adapter::Available(version) => (format!("Version {version} is available"), Some(("Update", Action::UpdateAdapter, primary)), true),
     };
     [app, UpdateRow { key: "update-adapter", name: "Claude Code adapter", state, button, attention }]
+}
+
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -213,7 +220,7 @@ impl About {
         match action {
             Action::Restart => drop(self.workspace.update(cx, |ws, cx| ws.install_update(cx))),
             Action::UpdateAdapter => drop(self.workspace.update(cx, |ws, cx| ws.update_adapter(cx))),
-            Action::CheckNow => drop(self.workspace.update(cx, |ws, cx| ws.check_for_update(cx))),
+            Action::CheckNow => drop(self.workspace.update(cx, |ws, cx| ws.check_for_update(true, cx))),
             Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
         }
     }
@@ -255,7 +262,7 @@ fn link(id: &'static str, label: &'static str) -> Stateful<Div> {
 
 impl Render for About {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let updates = self.workspace.upgrade().map(|ws| ws.read(cx).updates()).unwrap_or(Updates { app: AppUpdate::Off, adapter: Adapter::Current });
+        let updates = self.workspace.upgrade().map(|ws| ws.read(cx).updates()).unwrap_or(Updates { app: AppUpdate::Unchecked, adapter: Adapter::Current });
         let rows: Vec<Div> = notices(&updates).into_iter().enumerate().map(|(i, n)| self.notice_row(i, n, cx)).collect();
         let body = div()
             .flex_1()
@@ -470,6 +477,7 @@ impl Render for Licences {
 #[cfg(test)]
 mod tests {
     use super::{Action, Adapter, AppUpdate, BUILD, Notice, Updates, VERSION, notices, parts};
+    use crate::updater::FROM_SOURCE;
 
     #[test]
     fn the_feedback_link_carries_only_build_platform_and_agent() {
@@ -496,10 +504,10 @@ mod tests {
 
     #[test]
     fn settings_lists_each_part_with_its_own_button() {
-        let current = parts(&Updates { app: AppUpdate::Off, adapter: Adapter::Current });
+        let current = parts(&Updates { app: AppUpdate::Off(FROM_SOURCE), adapter: Adapter::Current });
         let rows: Vec<_> = current.iter().map(|p| (p.name, p.state.clone(), p.button.map(|b| b.0))).collect();
-        assert_eq!(rows, [("Endeavor", format!("Version {VERSION}"), None), ("Claude Code adapter", "Up to date".into(), None)]);
-        let adapter = parts(&Updates { app: AppUpdate::Off, adapter: Adapter::Available("0.4".into()) });
+        assert_eq!(rows, [("Endeavor", format!("Version {VERSION}. A build from source doesn't update itself."), None), ("Claude Code adapter", "Up to date".into(), None)]);
+        let adapter = parts(&Updates { app: AppUpdate::Off(FROM_SOURCE), adapter: Adapter::Available("0.4".into()) });
         assert_eq!((adapter[1].state.as_str(), adapter[1].button, adapter[1].attention), ("Version 0.4 is available", Some(("Update", Action::UpdateAdapter, true)), true));
         let both = parts(&Updates { app: AppUpdate::Ready("abc1234".into()), adapter: Adapter::Available("0.4".into()) });
         assert_eq!((both[0].button, both[1].button), (Some(("Restart", Action::Restart, true)), Some(("Update", Action::UpdateAdapter, false))));
@@ -507,7 +515,7 @@ mod tests {
 
     #[test]
     fn nothing_to_act_on_shows_no_notice() {
-        for app in [AppUpdate::Off, AppUpdate::Unchecked, AppUpdate::Checking(Some(40)), AppUpdate::UpToDate, AppUpdate::Failed("offline".into())] {
+        for app in [AppUpdate::Off(FROM_SOURCE), AppUpdate::Installing, AppUpdate::Unchecked, AppUpdate::Checking(Some(40)), AppUpdate::UpToDate, AppUpdate::Failed("offline".into())] {
             assert_eq!(notices(&Updates { app, adapter: Adapter::Current }), vec![]);
         }
     }
@@ -522,6 +530,8 @@ mod tests {
         assert_eq!(row(AppUpdate::UpToDate), ("Up to date".into(), Some("Check now"), false));
         assert_eq!(row(AppUpdate::Checking(None)), ("Checking for a newer build…".into(), None, false));
         assert_eq!(row(AppUpdate::Checking(Some(40))), ("Downloading the newest build… 40%".into(), None, false));
+        assert_eq!(row(AppUpdate::Installing), ("Installing the new build…".into(), None, false));
+        assert_eq!(row(AppUpdate::Off("only the Mac and Windows apps update themselves")).0, format!("Version {VERSION}. Only the Mac and Windows apps update themselves."));
         assert_eq!(row(AppUpdate::Failed("couldn't reach GitHub".into())), ("Couldn't check for a newer build: couldn't reach GitHub.".into(), Some("Check now"), false));
         assert_eq!(row(AppUpdate::Manual { build: "abc1234".into(), protected: false }).1, Some("Download"));
         let protected = row(AppUpdate::Manual { build: "abc1234".into(), protected: true });
@@ -533,7 +543,7 @@ mod tests {
 
     #[test]
     fn adapter_update_gets_the_primary_button_alone() {
-        let rows = notices(&Updates { app: AppUpdate::Off, adapter: Adapter::Available("0.82.0".into()) });
+        let rows = notices(&Updates { app: AppUpdate::Off(FROM_SOURCE), adapter: Adapter::Available("0.82.0".into()) });
         assert_eq!(
             rows,
             vec![Notice {
@@ -558,7 +568,7 @@ mod tests {
 
     #[test]
     fn installing_adapter_has_no_button() {
-        let rows = notices(&Updates { app: AppUpdate::Off, adapter: Adapter::Installing("0.82.0".into()) });
+        let rows = notices(&Updates { app: AppUpdate::Off(FROM_SOURCE), adapter: Adapter::Installing("0.82.0".into()) });
         assert_eq!(rows, vec![Notice { text: "Installing Claude Code adapter 0.82.0…".into(), button: None }]);
     }
 
