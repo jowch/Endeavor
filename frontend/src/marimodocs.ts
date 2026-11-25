@@ -126,6 +126,7 @@ export function initMarimoDocs(): void {
     moving++;
     void setDocs(msg.tab === "docs", docsShown, press, wait).finally(() => {
       moving--;
+      reported = null;
       follow();
     });
   });

@@ -14,6 +14,11 @@ const RELEASE: &str = "https://github.com/jowch/Endeavor/releases/download/night
 pub const RELEASE_PAGE: &str = "https://github.com/jowch/Endeavor/releases/tag/nightly";
 const PLATFORM: &str = if cfg!(windows) { "windows-x86_64" } else { "macos-arm64" };
 const APP: &str = "Endeavor.app";
+pub const FROM_SOURCE: &str = "a build from source doesn't update itself";
+pub const NOT_MAC_OR_WINDOWS: &str = "only the Mac and Windows apps update themselves";
+pub const NOWHERE: &str = "this copy can't tell where it's installed, so it doesn't update itself";
+pub const NOT_IN_BUNDLE: &str = "this copy isn't running from Endeavor.app, so it doesn't update itself";
+pub const UNSIGNED: &str = "this copy isn't signed, so it doesn't update itself";
 
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
@@ -92,18 +97,18 @@ pub fn place() -> Result<Place, &'static str> {
         return Ok(Place { app: std::env::current_exe().unwrap_or_default(), replaceable: false, protected: false });
     }
     if !cfg!(any(target_os = "macos", windows)) {
-        return Err("only the Mac and Windows apps update themselves");
+        return Err(NOT_MAC_OR_WINDOWS);
     }
     if CHANNEL != "nightly" {
-        return Err("a build from source doesn't update itself");
+        return Err(FROM_SOURCE);
     }
-    let exe = std::env::current_exe().map_err(|_| "can't tell where the app is")?;
+    let exe = std::env::current_exe().map_err(|_| NOWHERE)?;
     if cfg!(windows) {
-        let app = install_of(&exe).ok_or("can't tell where the app is")?;
+        let app = install_of(&exe).ok_or(NOWHERE)?;
         let replaceable = app.join(UNINSTALLER).is_file();
         return Ok(Place { app, replaceable, protected: false });
     }
-    let app = bundle_of(&exe).ok_or("not running from Endeavor.app")?;
+    let app = bundle_of(&exe).ok_or(NOT_IN_BUNDLE)?;
     let folder = app.parent().is_some_and(writable);
     let own = write_access(&app);
     Ok(Place { replaceable: folder && own.is_ok(), protected: folder && own == Err(NoWrite::AppManagement), app })
@@ -155,6 +160,12 @@ fn write_access(path: &Path) -> Result<(), NoWrite> {
 #[cfg(unix)]
 fn no_write_for(errno: Option<i32>) -> NoWrite {
     if errno == Some(libc::EPERM) { NoWrite::AppManagement } else { NoWrite::Other }
+}
+
+const CHECKING_SHOWN: Duration = Duration::from_millis(1200);
+
+pub fn checking_left(asked: bool, took: Duration) -> Duration {
+    if asked { CHECKING_SHOWN.saturating_sub(took) } else { Duration::ZERO }
 }
 
 const DAILY: Duration = Duration::from_secs(24 * 3600);
@@ -262,7 +273,7 @@ pub fn check(place: &Place, commit: &str, committed: &str, progress: &dyn Fn(f32
     let staged = if cfg!(windows) {
         fetch_installer(RELEASE, &folder()?, &offer, progress)?
     } else {
-        let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off("this copy isn't signed with a Developer ID")) };
+        let Some(team) = team_of(&place.app) else { return Ok(Outcome::Off(UNSIGNED)) };
         fetch(&folder()?, &offer, &team, committed, progress)?
     };
     Ok(Outcome::Ready { build: offer.build(), commit: offer.commit, staged })
@@ -618,8 +629,15 @@ mod tests {
     }
 
     #[test]
+    fn a_check_someone_asked_for_shows_checking_long_enough_to_see() {
+        assert_eq!(checking_left(true, Duration::from_millis(300)), Duration::from_millis(900));
+        assert_eq!(checking_left(true, Duration::from_secs(30)), Duration::ZERO);
+        assert_eq!(checking_left(false, Duration::from_millis(300)), Duration::ZERO, "the daily check in the background doesn't wait");
+    }
+
+    #[test]
     fn a_copy_that_cant_update_never_checks() {
-        let mut u = Updater { place: Err("a build from source doesn't update itself"), state: State::Off("a build from source doesn't update itself"), progress: Arc::default(), last_try: None };
+        let mut u = Updater { place: Err(FROM_SOURCE), state: State::Off(FROM_SOURCE), progress: Arc::default(), last_try: None };
         assert!(!u.due(Instant::now()));
         assert_eq!(u.start(Instant::now()), None);
         assert_eq!(u.install(true), Ok(false));

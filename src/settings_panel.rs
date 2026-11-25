@@ -1488,7 +1488,7 @@ impl Workspace {
             Act::Update(action) => match action {
                 about::Action::Restart => self.install_update(cx),
                 about::Action::UpdateAdapter => self.update_adapter(cx),
-                about::Action::CheckNow => self.check_for_update(cx),
+                about::Action::CheckNow => self.check_for_update(true, cx),
                 about::Action::Download => crate::platform::open_url(crate::updater::RELEASE_PAGE, cx),
             },
             Act::Website => crate::platform::open_url(about::WEBSITE, cx),

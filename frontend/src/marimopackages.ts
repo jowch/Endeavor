@@ -118,7 +118,7 @@ let changed: ((m: StatusModel) => void) | null = null;
 let notebook = "";
 let sent = "";
 
-function report(): void {
+function report(again = false): void {
   if (!notebook || !model) return;
   const msg = {
     type: "state" as const,
@@ -134,7 +134,7 @@ function report(): void {
     drawer: drawerTab(),
   };
   const json = JSON.stringify(msg);
-  if (json === sent) return;
+  if (json === sent && !again) return;
   sent = json;
   send(msg);
 }
@@ -187,6 +187,7 @@ export function initMarimoPackages(): void {
     raw = msg.environment;
     refresh();
   });
-  new MutationObserver(report).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
+  on("drawer", () => report(true));
+  new MutationObserver(() => report()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-endeavor-drawer"] });
   new MutationObserver(hideMarimoInstallAlerts).observe(document.body, { childList: true, subtree: true });
 }
