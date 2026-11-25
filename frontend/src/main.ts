@@ -23,6 +23,7 @@ import { initTheme, initTokens } from "./theme";
 import { onMarimo } from "./engine";
 import { initDismissResumedBanner } from "./reconnected";
 import { initMarimoDocs } from "./marimodocs";
+import { initMarimoLook } from "./marimotheme";
 import { initMarimoPackages } from "./marimopackages";
 import { watchRedraws } from "./redraw";
 
@@ -31,6 +32,7 @@ function initOnMarimo() {
   initState();
   initDrawer();
   initTokens();
+  initMarimoLook();
   initQuote();
   initAskBox();
   initAnnotate();

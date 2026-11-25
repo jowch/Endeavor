@@ -2189,10 +2189,11 @@ ${text.value}` : sent2.comment;
   var HEADER = 36;
   var SIDE_WIDTH = 500;
   var SIDE_FROM = 1300;
+  var UNDER_MARIMO_POPOVERS = 40;
   var css12 = `
   #endeavor-drawer { display: none; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] #endeavor-drawer { display: flex; }
-  html[data-endeavor-look="endeavor"][data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] #endeavor-drawer { display: flex; }
+  html[data-endeavor-look="endeavor"]:not([data-endeavor-engine="marimo"])[data-endeavor-drawer] body { padding-bottom: var(--endeavor-drawer-pad); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #endeavor-drawer { display: flex;
     left: var(--endeavor-docs-left, 0px); bottom: var(--endeavor-docs-bottom, 0px); }
   html[data-endeavor-engine="marimo"][data-endeavor-drawer="packages"] #App,
@@ -2200,6 +2201,7 @@ ${text.value}` : sent2.comment;
   #endeavor-drawer { position: fixed; left: 0; right: 0; bottom: 0; height: var(--endeavor-drawer-h); z-index: 70;
     flex-direction: column; background: var(--e-bg-page); border-top: 1px solid var(--e-border);
     font: 12.5px/1.45 system-ui, -apple-system, sans-serif; color: var(--e-text-secondary); }
+  html[data-endeavor-engine="marimo"] #endeavor-drawer { z-index: ${UNDER_MARIMO_POPOVERS}; }
   #endeavor-drawer .grip { position: absolute; top: -4px; left: 0; right: 0; height: 8px; cursor: ns-resize; }
   #endeavor-drawer .grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }
@@ -3362,20 +3364,19 @@ footer form#feedback { display: none !important; }
   var CLEAR_OF_BUTTONS = 8;
   var RUN_STRIP_ROOM = 96;
   var BOTTOM_BUTTONS_INSET = 20;
-  var TRIES = 4;
-  var SETTLE_MS = 1200;
+  var SETTLE_MS = 5e3;
   var MOUNT_MS = 15e3;
   var POLL_MS = 50;
   var css16 = `
   html[data-endeavor-drawer="docs"] ${PANEL} {
     position: fixed !important; left: var(--endeavor-docs-left, 0px); right: 0; bottom: var(--endeavor-docs-bottom, 0px); top: auto; width: auto !important;
-    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: 40;
+    height: var(--endeavor-drawer-h, 42vh); flex: none !important; z-index: ${UNDER_MARIMO_POPOVERS};
     border-top: 1px solid var(--slate-6, #ddd); background: var(--background, #fff); }
   html[data-endeavor-drawer="docs"] [data-panel-resize-handle-id] { display: none; }
   html[data-endeavor-drawer="docs"] #App, html[data-endeavor-drawer="docs"] [data-testid=chrome-body] {
     padding-bottom: var(--endeavor-drawer-pad, 42vh); }
   #endeavor-docs-grip { display: none; }
-  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: 41; height: 8px; cursor: ns-resize;
+  html[data-endeavor-drawer="docs"] #endeavor-docs-grip { display: block; position: fixed; z-index: ${UNDER_MARIMO_POPOVERS + 1}; height: 8px; cursor: ns-resize;
     left: var(--endeavor-docs-left, 0px); right: 0; bottom: calc(var(--endeavor-docs-bottom, 0px) + var(--endeavor-drawer-h, 42vh) - 4px); }
   #endeavor-docs-grip::after { content: ""; position: absolute; left: calc(50% - 14px); top: 1px; width: 28px; height: 3px;
     border-radius: 2px; background: var(--e-control-edge); }
@@ -3388,19 +3389,22 @@ footer form#feedback { display: none !important; }
     const panel = document.querySelector(PANEL);
     return !!panel && showsDocs(panel.getAttribute("data-panel-size"), panel.querySelector(".uppercase")?.textContent ?? "");
   }
-  async function setDocs(want, shown2, press, wait, tries = TRIES) {
-    const settle = async () => {
-      for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
-    };
+  async function setDocs(want, shown2, press, wait) {
     for (let waited = 0; shown2() !== want && !press(); waited += POLL_MS) {
       if (waited >= MOUNT_MS) return false;
       await wait(POLL_MS);
     }
-    for (let i = 1; i <= tries && shown2() !== want; i++) {
-      await settle();
-      if (shown2() !== want && i < tries) press();
-    }
+    for (let waited = 0; waited < SETTLE_MS && shown2() !== want; waited += POLL_MS) await wait(POLL_MS);
     return shown2() === want;
+  }
+  function pressLikeAMouse(target) {
+    const box2 = target.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, detail: 1, clientX: box2.x + box2.width / 2, clientY: box2.y + box2.height / 2, pointerId: 1, pointerType: "mouse", isPrimary: true };
+    target.dispatchEvent(new PointerEvent("pointerdown", { ...at, buttons: 1 }));
+    target.dispatchEvent(new MouseEvent("mousedown", { ...at, buttons: 1 }));
+    target.dispatchEvent(new PointerEvent("pointerup", at));
+    target.dispatchEvent(new MouseEvent("mouseup", at));
+    target.dispatchEvent(new MouseEvent("click", at));
   }
   var reported = null;
   var moving = 0;
@@ -3455,7 +3459,7 @@ footer form#feedback { display: none !important; }
     capDrawer(tallestDrawer);
     const press = () => {
       const option = document.querySelector(DOCS_OPTION);
-      option?.click();
+      if (option) pressLikeAMouse(option);
       return !!option;
     };
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -3469,6 +3473,51 @@ footer form#feedback { display: none !important; }
     });
     new MutationObserver(follow3).observe(document.body, { attributes: true, attributeFilter: ["data-panel-size", "inert"], childList: true, subtree: true, characterData: true });
     follow3();
+  }
+
+  // src/marimotheme.ts
+  var LOOK = `html[data-endeavor-look="endeavor"]`;
+  var NEUTRALS = (ramp) => ramp.map((value, i) => `--slate-${i + 1}: ${value}; --gray-${i + 1}: ${value};`).join(" ");
+  var DARK_RAMP = ["#151517", "#18181A", "#1C1C1F", "#222225", "#26262A", "#2A2A2E", "#3A3A40", "#4A4A4E", "#6E6E72", "#858483", "#BDBCBA", "#F0EFEC"];
+  var LIGHT_RAMP = ["#FCFCFD", "#F8F8FA", "#F4F4F6", "#EEEEF1", "#EAEAED", "#E1E1E6", "#D9D9DF", "#B9B9C0", "#8A8A92", "#6E6E76", "#5C5C64", "#1B1B1F"];
+  var marimoLook = `
+${LOOK} body.dark {
+  ${NEUTRALS(DARK_RAMP)}
+  --background: #151517; --foreground: #F0EFEC;
+  --card: #151517; --card-foreground: #F0EFEC;
+  --popover: #26262A; --popover-foreground: #F0EFEC;
+  --muted: #1C1C1F; --muted-foreground: #8C8B8A;
+  --secondary: #1C1C1F; --secondary-foreground: #F0EFEC;
+  --accent: #313136; --accent-foreground: #F0EFEC;
+  --border: #2A2A2E; --input: #3A3A40; --ring: #E08A5E;
+  --cm-background: #1B1B1E;
+}
+${LOOK} body.light {
+  ${NEUTRALS(LIGHT_RAMP)}
+  --background: #FCFCFD; --foreground: #1B1B1F;
+  --card: #FCFCFD; --card-foreground: #1B1B1F;
+  --popover: #FFFFFF; --popover-foreground: #1B1B1F;
+  --muted: #F4F4F6; --muted-foreground: #5C5C64;
+  --secondary: #F4F4F6; --secondary-foreground: #1B1B1F;
+  --accent: #EEEEF1; --accent-foreground: #1B1B1F;
+  --border: #E1E1E6; --input: #8A8A92; --ring: #CC3F00;
+  --cm-background: #F4F4F6;
+}
+${LOOK} #App { --e-side: clamp(28px, calc(100vw * 50 / 860), 50px); --content-width: 731px; }
+${LOOK} #App > div.sticky:has([data-testid=dir-completion-input]) { display: none !important; }
+${LOOK} #App > div:has(> .m-auto [data-testid=cell-column]) { padding: 48px 0 0 !important; }
+${LOOK} #App .m-auto:has(> div > [data-testid=cell-column]) { margin-left: var(--e-side) !important; margin-right: auto !important; }
+${LOOK} [data-testid=shutdown-button] { display: none !important; }
+${LOOK} .marimo-cell :is(.cm-editor, .cm-gutters) { background-color: var(--cm-background) !important; }
+`;
+  function initMarimoLook() {
+    const style2 = document.createElement("style");
+    style2.id = "endeavor-theme";
+    style2.textContent = marimoLook;
+    document.head.append(style2);
+    on("theme", (msg) => {
+      document.documentElement.dataset.endeavorLook = msg.name;
+    });
   }
 
   // src/marimopackages.ts
@@ -3628,6 +3677,7 @@ footer form#feedback { display: none !important; }
     initState();
     initDrawer();
     initTokens();
+    initMarimoLook();
     initQuote();
     initAskBox();
     initAnnotate();
