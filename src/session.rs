@@ -635,6 +635,10 @@ impl Session {
         self.id.take()
     }
 
+    pub fn opened_a_file_that_isnt_a_notebook(&self) -> bool {
+        self.notebook.is_none() && self.open_failed.as_ref().is_some_and(|(_, error)| error.starts_with("not_a_notebook::"))
+    }
+
     pub fn retry_open(&mut self) {
         if self.failed.take().is_none() {
             return;
@@ -3684,6 +3688,19 @@ more" }"#);
         let (title, input) = s.permission_input(&request);
         assert_eq!(title, "mcp__notebook__edit_cell", "the title names the tool, not just the server");
         assert_eq!(input, Some(args), "the arguments come from the earlier tool_call_update, already unwrapped");
+    }
+
+    #[test]
+    fn only_a_file_that_isnt_a_notebook_stops_the_opening() {
+        let mut s = Session::loading(1, SessionId::new("abc"), Place::local("/tmp"), None, "Old".into());
+        s.notebook_path = Some("/tmp/demo.R".into());
+        assert!(!s.opened_a_file_that_isnt_a_notebook());
+        s.open_failed = Some(("/tmp/demo.R".into(), "open_failed::Julia stopped".into()));
+        assert!(!s.opened_a_file_that_isnt_a_notebook(), "another failure can be tried again");
+        s.open_failed = Some(("/tmp/demo.R".into(), "not_a_notebook::'/tmp/demo.R' isn't a notebook".into()));
+        assert!(s.opened_a_file_that_isnt_a_notebook());
+        s.notebook = Some("nb".into());
+        assert!(!s.opened_a_file_that_isnt_a_notebook(), "a notebook that opened after all shows");
     }
 
     #[test]

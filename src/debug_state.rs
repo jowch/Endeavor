@@ -575,6 +575,7 @@ impl Workspace {
         let shows = match &shown {
             PaneShows::Host(_) => "host",
             PaneShows::Missing => "missing",
+            PaneShows::NotANotebook => "not_a_notebook",
             PaneShows::NoNotebook => "no_notebook",
             PaneShows::Stopped(_) => "stopped",
             PaneShows::Crashed => "crashed",
