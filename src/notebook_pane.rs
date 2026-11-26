@@ -283,6 +283,7 @@ pub fn out_of_step_answer(last_reload: Option<std::time::Instant>, now: std::tim
 pub enum PaneShows {
     Host(HostPane),
     Missing,
+    NotANotebook,
     NoNotebook,
     Stopped(Stopped),
     Crashed,
@@ -1301,7 +1302,7 @@ impl Workspace {
         if self.active != Some(key) {
             return;
         }
-        let Some((path, e)) = self.sessions.iter().find(|s| s.key == key && s.notebook.is_none()).and_then(|s| s.open_failed.clone()) else { return };
+        let Some((path, e)) = self.sessions.iter().find(|s| s.key == key && s.notebook.is_none() && !s.not_a_notebook()).and_then(|s| s.open_failed.clone()) else { return };
         let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
         self.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
     }
@@ -1422,6 +1423,35 @@ impl Workspace {
         .detach();
     }
 
+    fn render_unopened_file(&self, title: &'static str, file: &str, path: &str, why: &'static str, key: u64, cx: &mut Context<Self>) -> AnyElement {
+        let mono = div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_primary()).child(file.to_owned());
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(10.))
+            .child(new_session::glyph_at(Glyph::FileX, theme::text_muted(), 2.))
+            .child(page_title(div().flex().gap(px(6.)).child(title).child(mono)))
+            .child(div().max_w(px(460.)).px_4().text_center().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(new_session::tilde(Path::new(path))))
+            .child(page_text(why))
+            .child(
+                div()
+                    .mt(px(6.))
+                    .flex()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .relative()
+                            .child(page_button("locate-file", Glyph::Search, "Locate file…", false).on_click(cx.listener(move |this, _, _, cx| this.pick_notebook(key, cx))))
+                            .children(self.render_notebook_picker(key, cx)),
+                    )
+                    .child(page_button("new-notebook-here", Glyph::File, "New notebook in this session", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx)))),
+            )
+            .into_any_element()
+    }
+
     pub fn notebook_page(&self, session: &Session, cx: &mut Context<Self>) -> Option<AnyElement> {
         let key = session.key;
         let mono = |text: String| div().font_family(theme::MONO).text_size(theme::size_code()).text_color(theme::text_primary()).child(text);
@@ -1431,33 +1461,8 @@ impl Workspace {
             PaneShows::Host(_) => return self.host_pane(&session.place.host, session.kind, true, cx),
             PaneShows::Page => return None,
             PaneShows::Crashed => self.render_crash_page(key, cx),
-            PaneShows::Missing => {
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(10.))
-                    .child(new_session::glyph_at(Glyph::FileX, theme::text_muted(), 2.))
-                    .child(page_title(div().flex().gap(px(6.)).child("Can't find").child(mono(file))))
-                    .child(div().max_w(px(460.)).px_4().text_center().font_family(theme::MONO).text_size(theme::size_meta()).text_color(theme::text_muted()).child(new_session::tilde(Path::new(&path))))
-                    .child(page_text("Nothing is there anymore. It may have been moved, renamed or deleted outside Endeavor."))
-                    .child(
-                        div()
-                            .mt(px(6.))
-                            .flex()
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .relative()
-                                    .child(page_button("locate-file", Glyph::Search, "Locate file…", false).on_click(cx.listener(move |this, _, _, cx| this.pick_notebook(key, cx))))
-                                    .children(self.render_notebook_picker(key, cx)),
-                            )
-                            .child(page_button("new-notebook-here", Glyph::File, "New notebook in this session", false).on_click(cx.listener(move |this, _, _, cx| this.new_notebook_here(key, cx)))),
-                    )
-                    .into_any_element()
-            }
+            PaneShows::Missing => self.render_unopened_file("Can't find", &file, &path, "Nothing is there anymore. It may have been moved, renamed or deleted outside Endeavor.", key, cx),
+            PaneShows::NotANotebook => self.render_unopened_file("Can't open", &file, &path, "It isn't a notebook. Endeavor opens Julia notebooks made with Pluto, R notebooks, and Python notebooks made with marimo.", key, cx),
             PaneShows::NoNotebook => new_session::turtle_pane()
                 .child(page_title("No notebook in this session yet"))
                 .child(page_text(format!("{} makes one when there is code to run. You can also start one yourself.", session.agent.name())))
@@ -1524,6 +1529,9 @@ impl Workspace {
         }
         if session.missing {
             return PaneShows::Missing;
+        }
+        if session.not_a_notebook() {
+            return PaneShows::NotANotebook;
         }
         if session.notebook_path.is_none() {
             return if session.notebook.is_some() { PaneShows::Page } else { PaneShows::NoNotebook };
