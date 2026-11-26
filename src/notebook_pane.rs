@@ -1509,8 +1509,7 @@ impl Workspace {
 
     pub fn starting_ahead_line(&self, session: &Session, cx: &App) -> Option<String> {
         match self.host_pane_state(&session.place.host, session.kind, cx)? {
-            HostPane::JuliaStarting(_) => self.julia_ahead(&session.place.host),
-            HostPane::RStarting(_) => self.r_ahead(&session.place.host),
+            HostPane::JuliaStarting(_) | HostPane::RStarting(_) => self.starting_steps(&session.place.host, session.kind).map(crate::connection::ahead_line),
             _ => None,
         }
     }

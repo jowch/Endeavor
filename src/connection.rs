@@ -76,6 +76,9 @@ pub struct Connection {
     pub r_failed: Option<String>,
     pub r_status: Option<pluto::RStatus>,
     pub r_started: Option<pluto::Started>,
+    pub python: Option<Steps>,
+    python_waits: u32,
+    pub python_failed: Option<String>,
 }
 
 #[derive(Clone)]
@@ -99,12 +102,12 @@ pub struct Steps {
     pub since: Instant,
     pub detail: Option<String>,
     found_julia: bool,
-    for_r: bool,
+    starts_julia: bool,
 }
 
 impl Steps {
     fn new(current: impl Into<String>) -> Steps {
-        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false, for_r: false }
+        Steps { done: Vec::new(), current: current.into(), since: Instant::now(), detail: None, found_julia: false, starts_julia: true }
     }
 
     fn advance(&mut self, done: impl Into<String>, next: impl Into<String>) {
@@ -126,7 +129,7 @@ impl Steps {
         if self.current == pluto::OPENING {
             return left;
         }
-        if !self.for_r && !self.current.starts_with("Starting Julia") {
+        if self.starts_julia && !self.current.starts_with("Starting Julia") {
             left.push("Start Julia");
         }
         left.push("Open notebook");
@@ -157,7 +160,7 @@ impl Steps {
         }
         let done = self.current.trim_end_matches('…').replacen("Starting", "Started", 1).replacen("Installing", "Installed", 1);
         self.advance(done, pluto::OPENING);
-        self.detail = Some(if self.for_r { "The first notebook can take a minute to open." } else { "The first notebook after Julia starts takes a while to compile." }.into());
+        self.detail = Some(if self.starts_julia { "The first notebook after Julia starts takes a while to compile." } else { "The first notebook can take a minute to open." }.into());
     }
 
     fn first(step: &str, start: impl FnOnce() -> Steps) -> Steps {
@@ -169,7 +172,11 @@ impl Steps {
     }
 
     fn r() -> Steps {
-        Steps { for_r: true, ..Steps::new("Starting R") }
+        Steps { starts_julia: false, ..Steps::new("Starting R") }
+    }
+
+    fn python() -> Steps {
+        Steps { starts_julia: false, ..Steps::new("Starting Python") }
     }
 
     fn r_step(&mut self, step: &str) {
@@ -262,7 +269,39 @@ impl Connection {
     fn waits(&mut self, kind: Backend) -> &mut u32 {
         match kind {
             Backend::Pluto => &mut self.julia_waits,
-            Backend::Ember | Backend::Marimo => &mut self.r_waits,
+            Backend::Ember => &mut self.r_waits,
+            Backend::Marimo => &mut self.python_waits,
+        }
+    }
+
+    fn engine_pane(&self, kind: Backend) -> Option<HostPane> {
+        let (failed, steps) = match kind {
+            Backend::Pluto => (&self.julia_failed, &self.julia),
+            Backend::Ember => (&self.r_failed, &self.r),
+            Backend::Marimo => (&self.python_failed, &self.python),
+        };
+        match (kind, failed, steps) {
+            (Backend::Pluto, Some(why), _) => Some(HostPane::JuliaFailed(why.clone())),
+            (Backend::Pluto, None, Some(steps)) => Some(HostPane::JuliaStarting(steps.current.clone())),
+            (_, Some(why), _) => Some(HostPane::RFailed(why.clone())),
+            (_, None, Some(steps)) => Some(HostPane::RStarting(steps.current.clone())),
+            (_, None, None) => None,
+        }
+    }
+
+    fn steps(&mut self, kind: Backend) -> &mut Option<Steps> {
+        match kind {
+            Backend::Pluto => &mut self.julia,
+            Backend::Ember => &mut self.r,
+            Backend::Marimo => &mut self.python,
+        }
+    }
+
+    fn failed(&mut self, kind: Backend) -> &mut Option<String> {
+        match kind {
+            Backend::Pluto => &mut self.julia_failed,
+            Backend::Ember => &mut self.r_failed,
+            Backend::Marimo => &mut self.python_failed,
         }
     }
 
@@ -305,6 +344,9 @@ impl Connection {
             r_failed: None,
             r_status: None,
             r_started: None,
+            python: None,
+            python_waits: 0,
+            python_failed: None,
             lost: None,
             dropped: None,
             crashed: false,
@@ -369,6 +411,8 @@ impl Connection {
         self.r_failed = None;
         self.r_status = None;
         self.r_started = None;
+        self.python = None;
+        self.python_failed = None;
         self.notebooks = serde_json::Value::Null;
         self.cells = serde_json::Value::Null;
         self.runtime.take()
@@ -1398,9 +1442,9 @@ impl Workspace {
         if paths.is_empty() {
             return;
         }
-        let steps = [self.julia_steps(host, Backend::Pluto, cx), self.julia_steps(host, Backend::Ember, cx)];
+        let steps = ENGINES.map(|kind| self.julia_steps(host, kind, cx));
         let reopen = cx.background_executor().spawn(async move {
-            let failed = std::cell::RefCell::new([None, None]);
+            let failed = std::cell::RefCell::new([None, None, None]);
             let unexplained = std::cell::RefCell::new(Vec::new());
             let list = || pluto::call_tool(&bridge, "list_notebooks", serde_json::json!({})).ok();
             let find = |listed: &Option<serde_json::Value>, path: &str| listed.as_ref()?.as_array()?.iter().find(|nb| nb["path"] == path).cloned();
@@ -1412,13 +1456,14 @@ impl Workspace {
                         Some(nb) => nb,
                         None => {
                             let run = resume.iter().any(|(p, modified)| *p == path && modified.is_none_or(|m| pluto::file_info(&bridge, &path) == Ok(Some(m))));
-                            let r = crate::new_session::kind_of_path(&path) == Backend::Ember;
-                            match pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps[r as usize].step(step)) {
+                            let kind = crate::new_session::kind_of_path(&path);
+                            let engine = engine_index(kind);
+                            match pluto::until_julia(|| pluto::open_notebook(&bridge, &path, run), &|step| steps[engine].step(step)) {
                                 Ok(nb) => nb,
                                 Err(e) => find(&list(), &path).or_else(|| {
                                     eprintln!("Couldn't reopen {path}: {e}");
-                                    if pane_failure(crate::new_session::kind_of_path(&path), &e).is_some() {
-                                        failed.borrow_mut()[r as usize].get_or_insert(e);
+                                    if pane_failure(kind, &e).is_some() {
+                                        failed.borrow_mut()[engine].get_or_insert(e);
                                     } else {
                                         unexplained.borrow_mut().push((path.clone(), e));
                                     }
@@ -1435,10 +1480,11 @@ impl Workspace {
         });
         let host = host.clone();
         cx.spawn(async move |this, cx| {
-            let (reopened, [julia_failed, r_failed], unexplained) = reopen.await;
+            let (reopened, failed, unexplained) = reopen.await;
             let _ = this.update(cx, |this, cx| {
-                this.julia_answer(&host, Backend::Pluto, julia_failed.as_deref(), cx);
-                this.julia_answer(&host, Backend::Ember, r_failed.as_deref(), cx);
+                for (kind, failed) in ENGINES.into_iter().zip(failed) {
+                    this.julia_answer(&host, kind, failed.as_deref(), cx);
+                }
             });
             let previewed = reopened.iter().filter(|(.., previewed)| *previewed).count();
             let reopened: Vec<(String, String)> = reopened.into_iter().map(|(id, path, _)| (id, path)).collect();
@@ -1762,15 +1808,12 @@ impl Workspace {
             while let Some(step) = rx.next().await {
                 let heard = this.update(cx, |this, cx| {
                     if let Some(connection) = this.connections.get_mut(&host) {
+                        *connection.failed(kind) = None;
+                        let steps = connection.steps(kind);
                         match kind {
-                            Backend::Pluto => {
-                                connection.julia_failed = None;
-                                connection.julia.get_or_insert_with(|| Steps::first(&step, || Steps::new("Starting Julia"))).julia(&step);
-                            }
-                            Backend::Ember | Backend::Marimo => {
-                                connection.r_failed = None;
-                                connection.r.get_or_insert_with(|| Steps::first(&step, Steps::r)).r_step(&step);
-                            }
+                            Backend::Pluto => steps.get_or_insert_with(|| Steps::first(&step, || Steps::new("Starting Julia"))).julia(&step),
+                            Backend::Ember => steps.get_or_insert_with(|| Steps::first(&step, Steps::r)).r_step(&step),
+                            Backend::Marimo => steps.get_or_insert_with(|| Steps::first(&step, Steps::python)).r_step(&step),
                         }
                     }
                     cx.notify();
@@ -1784,10 +1827,7 @@ impl Workspace {
                     let waits = connection.waits(kind);
                     *waits = waits.saturating_sub(1);
                     if *waits == 0 {
-                        match kind {
-                            Backend::Pluto => connection.julia = None,
-                            Backend::Ember | Backend::Marimo => connection.r = None,
-                        }
+                        *connection.steps(kind) = None;
                     }
                 }
                 cx.notify();
@@ -1797,18 +1837,20 @@ impl Workspace {
         JuliaSteps(tx)
     }
 
-    pub fn julia_ahead(&self, host: &HostId) -> Option<String> {
-        self.connections.get(host)?.julia.as_ref().map(ahead_line)
-    }
-
-    pub fn r_ahead(&self, host: &HostId) -> Option<String> {
-        self.connections.get(host)?.r.as_ref().map(ahead_line)
+    pub fn starting_steps(&self, host: &HostId, kind: Backend) -> Option<&Steps> {
+        let connection = self.connections.get(host)?;
+        match kind {
+            Backend::Pluto => connection.julia.as_ref(),
+            Backend::Ember => connection.r.as_ref(),
+            Backend::Marimo => connection.python.as_ref(),
+        }
     }
 
     pub fn app_waits(&self, host: &HostId, kind: Backend) -> u32 {
         self.connections.get(host).map_or(0, |c| match kind {
             Backend::Pluto => c.julia_waits,
-            Backend::Ember | Backend::Marimo => c.r_waits,
+            Backend::Ember => c.r_waits,
+            Backend::Marimo => c.python_waits,
         })
     }
 
@@ -1816,10 +1858,7 @@ impl Workspace {
         let failed = error.and_then(|e| pane_failure(kind, e));
         let Some(connection) = self.connections.get_mut(host) else { return };
         if failed.is_some() || error.is_none() {
-            match kind {
-                Backend::Pluto => connection.julia_failed = failed,
-                Backend::Ember | Backend::Marimo => connection.r_failed = failed,
-            }
+            *connection.failed(kind) = failed;
             cx.notify();
         }
     }
@@ -1866,14 +1905,14 @@ impl Workspace {
         cx.notify();
     }
 
-    fn retry_r(&mut self, host: &HostId, install: Option<Backend>, cx: &mut Context<Self>) {
+    fn retry_r(&mut self, host: &HostId, kind: Backend, install: bool, cx: &mut Context<Self>) {
         let bridge = self.connections.get_mut(host).and_then(|connection| {
-            connection.r_failed = None;
+            *connection.failed(kind) = None;
             connection.bridge()
         });
         let Some(again) = self.r_retry_target(host) else { return cx.notify() };
-        match bridge.zip(install) {
-            Some((bridge, kind)) => {
+        match bridge.filter(|_| install) {
+            Some(bridge) => {
                 let allowed = cx.background_executor().spawn(async move { if kind == Backend::Marimo { pluto::allow_uv_install(&bridge) } else { pluto::allow_r_install(&bridge) } });
                 let host = host.clone();
                 cx.spawn(async move |this, cx| {
@@ -1881,7 +1920,7 @@ impl Workspace {
                     let _ = this.update(cx, |this, cx| match allowed {
                         Ok(()) => {
                             if let Some(connection) = this.connections.get_mut(&host).filter(|_| kind == Backend::Marimo) {
-                                connection.r.get_or_insert_with(Steps::r).r_step(DOWNLOADING_UV);
+                                connection.python.get_or_insert_with(Steps::python).r_step(DOWNLOADING_UV);
                             }
                             this.open_again(again, cx)
                         }
@@ -1915,13 +1954,7 @@ impl Workspace {
             return (!lost.page.as_deref().is_some_and(|page| shown.starts_with(page))).then_some(HostPane::Lost);
         }
         Some(match connection.map_or(Status::Connecting, |c| c.status.clone()) {
-            Status::Ready => match (kind, connection) {
-                (Backend::Pluto, Some(Connection { julia_failed: Some(why), .. })) => HostPane::JuliaFailed(why.clone()),
-                (Backend::Pluto, Some(Connection { julia: Some(steps), .. })) => HostPane::JuliaStarting(steps.current.clone()),
-                (Backend::Ember | Backend::Marimo, Some(Connection { r_failed: Some(why), .. })) if is_python_failure(why) == (kind == Backend::Marimo) => HostPane::RFailed(why.clone()),
-                (Backend::Ember | Backend::Marimo, Some(Connection { r: Some(steps), .. })) => HostPane::RStarting(steps.current.clone()),
-                _ => return None,
-            },
+            Status::Ready => return connection?.engine_pane(kind),
             Status::Connecting | Status::Browsing | Status::Starting => HostPane::Starting,
             Status::Died(_) if connection.is_some_and(|c| c.stopping) => HostPane::Stopping,
             Status::Died(reason) if connection.is_some_and(|c| c.crashed) => HostPane::Crashed(reason),
@@ -1983,7 +2016,7 @@ impl Workspace {
                 }
             }
             HostPane::JuliaStarting(_) => return connection.and_then(|c| c.julia.as_ref()).map(|steps| starting_pane(steps).into_any_element()),
-            HostPane::RStarting(_) => return connection.and_then(|c| c.r.as_ref()).map(|steps| starting_pane(steps).into_any_element()),
+            HostPane::RStarting(_) => return self.starting_steps(host, kind).map(|steps| starting_pane(steps).into_any_element()),
             HostPane::JuliaFailed(reason) => {
                 let host = host.clone();
                 let retry = div()
@@ -2004,7 +2037,7 @@ impl Workspace {
             HostPane::RFailed(error) => {
                 let host_id = host.clone();
                 let shows = r_failed_shows(host, &error, self.hosts.downloads_own_uv(host), own_r_offered());
-                let button = |label: &'static str, install: Option<Backend>| {
+                let button = |label: &'static str, install: bool| {
                     let host = host_id.clone();
                     div()
                         .id(shows.button())
@@ -2017,20 +2050,20 @@ impl Workspace {
                         .bg(theme::accent())
                         .text_color(gpui::white())
                         .button_text(label)
-                        .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, install, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.retry_r(&host, kind, install, cx)))
                 };
                 match &shows {
                     RFailedShows::InstallUv => {
                         let words = format!("Python notebooks need uv. Endeavor can download its own, just for Endeavor. It changes nothing else on {name}.");
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", Some(Backend::Marimo)))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Install uv", true))
                     }
                     RFailedShows::NoUv => {
                         let words = format!("Python notebooks need uv. Install it on {name} (docs.astral.sh/uv), then try again.");
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No uv on {name}"))).child(message(words)).child(button("Try again", false))
                     }
                     RFailedShows::PythonFailed(why) => {
                         let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("Python notebooks couldn't start on {name}.") };
-                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", false))
                     }
                     RFailedShows::InstallR(item) => {
                         let size = item.size_mb.map(|mb| format!(", about {mb} MB")).unwrap_or_default();
@@ -2039,11 +2072,11 @@ impl Workspace {
                             item.name,
                             crate::platform::this_computer!(lower)
                         );
-                        resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("Install R", Some(Backend::Ember)))
+                        resting.child(div().text_color(theme::text_muted()).child(format!("No R on {name}"))).child(message(words)).child(button("Install R", true))
                     }
                     RFailedShows::RFailed(why) => {
                         let heading = if *why == pluto::OPEN_STUCK { format!("The notebook didn't open on {name}.") } else { format!("R notebooks couldn't start on {name}.") };
-                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", None))
+                        resting.child(div().text_color(theme::text_muted()).child(heading)).child(message(pluto::julia_failed_words(why))).child(button("Try again", false))
                     }
                 }
             }
@@ -2095,7 +2128,7 @@ pub fn starting_ahead(state: &HostPane, waits: u32) -> bool {
     waits == 0 && matches!(state, HostPane::JuliaStarting(_) | HostPane::RStarting(_))
 }
 
-fn ahead_line(steps: &Steps) -> String {
+pub fn ahead_line(steps: &Steps) -> String {
     match steps.detail.as_deref() {
         Some(pct) if pct.ends_with('%') => format!("{} {pct}", steps.current),
         Some(stall) if stall.starts_with("No sign of progress") => format!("{}. {stall}", steps.current.trim_end_matches('…')),
@@ -2117,8 +2150,14 @@ pub enum HostPane {
     NotConnected(String),
 }
 
-fn is_python_failure(error: &str) -> bool {
-    pluto::python_failed(error).is_some()
+const ENGINES: [Backend; 3] = [Backend::Pluto, Backend::Ember, Backend::Marimo];
+
+fn engine_index(kind: Backend) -> usize {
+    match kind {
+        Backend::Pluto => 0,
+        Backend::Ember => 1,
+        Backend::Marimo => 2,
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -2543,7 +2582,7 @@ mod tests {
         assert_eq!(pane_failure(Backend::Marimo, no_uv).as_deref(), Some(no_uv));
         assert_eq!(pane_failure(Backend::Marimo, "open_stuck::It's still opening.").as_deref(), Some("python_failed::It's still opening."));
         assert_eq!(pane_failure(Backend::Marimo, "r_failed::R stopped while starting"), None);
-        assert!(super::is_python_failure(no_uv) && !super::is_python_failure("r_not_found::No R here"));
+        assert_eq!(pane_failure(Backend::Ember, no_uv), None);
     }
 
     #[test]
@@ -2592,6 +2631,39 @@ mod tests {
         assert!(starting_ahead(&r, 0), "R's setup for someone else, as Julia's");
         assert!(!starting_ahead(&r, 1));
         assert!(!starting_ahead(&HostPane::RFailed("r_failed::Couldn't install Ember".into()), 0));
+    }
+
+    #[test]
+    fn python_and_r_notebooks_on_one_host_each_show_their_own_setup_and_failure() {
+        use crate::pluto::JuliaStatus::{Ready, Starting};
+        let mut c = Connection::new(1, Status::Ready, Steps::new("Starting the notebook runtime"));
+        assert!(c.r_status_now(Starting { step: "Installing Ember for R notebooks".into(), quiet: 0 }));
+        assert_eq!(c.engine_pane(Backend::Ember), Some(HostPane::RStarting("Installing Ember for R notebooks…".into())));
+        assert_eq!(c.engine_pane(Backend::Marimo), None, "R's setup isn't the Python notebook's");
+
+        c.python.get_or_insert_with(Steps::python).r_step(super::DOWNLOADING_UV);
+        assert_eq!(c.engine_pane(Backend::Marimo), Some(HostPane::RStarting("Downloading uv…".into())));
+        assert_eq!(c.engine_pane(Backend::Ember), Some(HostPane::RStarting("Installing Ember for R notebooks…".into())));
+        assert!(c.python.as_ref().is_some_and(|s| s.done.is_empty()), "no R steps in Python's list");
+
+        let no_uv = "python_not_found::Python notebooks need uv.";
+        *c.failed(Backend::Marimo) = Some(no_uv.into());
+        assert!(c.r_status_now(Starting { step: "Starting R".into(), quiet: 0 }));
+        assert_eq!(c.engine_pane(Backend::Marimo), Some(HostPane::RFailed(no_uv.into())), "R starting doesn't clear Python's failure");
+        assert!(c.r_status_now(Ready));
+        assert_eq!(c.engine_pane(Backend::Ember), None);
+        assert_eq!(c.engine_pane(Backend::Marimo), Some(HostPane::RFailed(no_uv.into())));
+
+        *c.failed(Backend::Ember) = Some("r_failed::Couldn't install Ember".into());
+        *c.failed(Backend::Marimo) = None;
+        assert_eq!(c.engine_pane(Backend::Marimo), Some(HostPane::RStarting("Downloading uv…".into())), "R's failure isn't the Python notebook's");
+    }
+
+    #[test]
+    fn every_engine_has_its_own_reopen_slot() {
+        for (i, kind) in super::ENGINES.into_iter().enumerate() {
+            assert_eq!(super::engine_index(kind), i);
+        }
     }
 
     #[test]
