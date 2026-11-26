@@ -1302,7 +1302,7 @@ impl Workspace {
         if self.active != Some(key) {
             return;
         }
-        let Some((path, e)) = self.sessions.iter().find(|s| s.key == key && s.notebook.is_none() && !s.opened_a_file_that_isnt_a_notebook()).and_then(|s| s.open_failed.clone()) else { return };
+        let Some((path, e)) = self.sessions.iter().find(|s| s.key == key && s.notebook.is_none() && !s.not_a_notebook()).and_then(|s| s.open_failed.clone()) else { return };
         let title = format!("Couldn't open {}", folder_name(Path::new(&path)));
         self.show_notice(Notice::new(Spot::Pane, title, &e, Some(Retry::OpenNotebook(key, path))), cx);
     }
@@ -1530,7 +1530,7 @@ impl Workspace {
         if session.missing {
             return PaneShows::Missing;
         }
-        if session.opened_a_file_that_isnt_a_notebook() {
+        if session.not_a_notebook() {
             return PaneShows::NotANotebook;
         }
         if session.notebook_path.is_none() {
